@@ -14,7 +14,12 @@ function readView(page: import('@playwright/test').Page): Promise<BpView> {
   });
 }
 
+// Matches render with software WebGL (SwiftShader) here, so frames are slow and parallel workers compete for CPU.
+// The play tests get 90 s instead of 30 s. Their checks are unchanged.
+const PLAY_TIMEOUT_MS = 90_000;
+
 test('deploy, move, fire at a dummy', async ({ page }) => {
+  test.setTimeout(PLAY_TIMEOUT_MS);
   await page.goto('/next.html?debug');
   await page.getByRole('button', { name: 'Deploy' }).click();
   await page.getByRole('button', { name: 'Launch mission' }).click();
@@ -32,4 +37,24 @@ test('deploy, move, fire at a dummy', async ({ page }) => {
   await page.locator('canvas').click();
   const fired = await readView(page);
   expect(fired.shots).toBeGreaterThan(before.shots);
+});
+
+test('substation map loads and plays with no page errors', async ({ page }) => {
+  test.setTimeout(PLAY_TIMEOUT_MS);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.addInitScript(() => {
+    localStorage.setItem('bp_loadout', JSON.stringify({ map: 'substation' }));
+  });
+
+  await page.goto('/next.html?debug');
+  await page.getByRole('button', { name: 'Deploy' }).click();
+  await expect(page.getByText('Substation.', { exact: false })).toBeVisible();
+  await page.getByRole('button', { name: 'Launch mission' }).click();
+
+  // Let a few frames render, so a shader or render error would surface here.
+  await page.waitForTimeout(1000);
+  const view = await readView(page);
+  expect(view.state).toBe('play');
+  expect(errors).toEqual([]);
 });

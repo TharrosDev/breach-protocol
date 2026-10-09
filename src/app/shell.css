@@ -107,3 +107,19 @@ body {
   outline: 2px solid #58b7ff;
   outline-offset: -6px;
 }
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 24px;
+  transform: translateX(-50%);
+  z-index: 2;
+  max-width: calc(100% - 32px);
+  box-sizing: border-box;
+  padding: 8px 14px;
+  border-radius: 6px;
+  background: rgb(7 10 16 / 0.85);
+  color: var(--amber);
+  font-weight: 600;
+  pointer-events: none;
+}
