@@ -10,7 +10,7 @@ test('new app boots with no console errors', async ({ page }) => {
     if (m.type() === 'error') errors.push(m.text());
   });
   page.on('pageerror', (e) => errors.push(e.message));
-  await page.goto('/next.html');
+  await page.goto('/');
   await expect(page).toHaveTitle('Breach Protocol');
   const gl = await hasWebGL2(page);
   const heading = gl ? 'Breach Protocol' : 'WebGL 2 is required';
@@ -20,13 +20,13 @@ test('new app boots with no console errors', async ({ page }) => {
 
 test('new app has no horizontal scroll at 390 px', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/next.html');
+  await page.goto('/');
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
   expect(overflow).toBeLessThanOrEqual(0);
 });
 
-test('production root still serves the legacy game', async ({ page }) => {
-  const response = await page.goto('/');
+test('legacy game is served at /legacy/', async ({ page }) => {
+  const response = await page.goto('/legacy/');
   expect(response?.status()).toBe(200);
   await expect(page.getByRole('button', { name: 'Deploy' })).toBeVisible();
 });

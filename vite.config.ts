@@ -1,13 +1,9 @@
-import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 
-// The new app is served at /next.html while production / keeps the legacy game (public/index.html).
+// The new game is the root entry (index.html). The legacy single-file game is served unchanged at /legacy/.
 export default defineConfig({
   build: {
     target: 'es2022',
     sourcemap: true,
-    rollupOptions: {
-      input: { next: resolve(import.meta.dirname, 'next.html') },
-    },
   },
 });
