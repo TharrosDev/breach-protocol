@@ -4,8 +4,8 @@
 // public/index.html: 1476-1497 (feed, announce, damage indicator), 2530-2543 (kill feed and multi-kill banners),
 // 2880-2910 (HUD update), 2001 and 2886-2887 (flash and hurt), 2893-2898 (prompt), 3389-3400 (hit numbers, hints).
 import type { HudView } from '../ui/contracts';
-import type { HudExtras, HudOperator, IntroKeys } from '../ui/hud/hud';
-import type { FeedCls } from '../ui/hud/layout';
+import type { HudExtras, HudOperator, IntroKeys, ScoreboardRow } from '../ui/hud/hud';
+import { scoreboardFooter, type FeedCls } from '../ui/hud/layout';
 import { ENEMY_DEFS } from '../content/enemies';
 import type { Action } from '../content/ids';
 import { GADGETS } from '../content/gadgets';
@@ -32,6 +32,10 @@ export const SQUAD_ORDER_NAMES = ['ATTACK', 'HOLD', 'FOLLOW'] as const;
 export interface HudEnv {
   readonly difficultyTickets: number;
   readonly keyOf: (action: Action) => string;
+  // The map and difficulty names for the scoreboard footer (legacy CUR.name and DIFF.name). A missing name is left out
+  // of the footer.
+  readonly mapName?: string;
+  readonly difficultyName?: string;
 }
 
 export type HitLevel = HudView['hitMarker'];
@@ -195,8 +199,30 @@ export function buildHudView(sim: SimWorld, env: HudEnv, state: HudState): HudVi
   };
 }
 
-// The per-frame extras: squad cards and minimap dots, the crosshair spread, and the squad order key.
-export function buildHudExtras(sim: SimWorld, env: HudEnv): HudExtras {
+// The Tab scoreboard rows (legacy updScoreboard, index.html:2885-2894): the player, then each operator. The player's
+// status is Down, Active or KIA. Allies have no score or deaths in legacy, so those cells show a dash.
+export function scoreboardRows(sim: SimWorld): ScoreboardRow[] {
+  const p = sim.player;
+  const you: ScoreboardRow = {
+    name: 'You',
+    score: String(sim.score),
+    kills: String(sim.playerKills),
+    deaths: String(sim.deaths),
+    status: p.downed ? 'Down' : p.alive ? 'Active' : 'KIA',
+  };
+  const allies = sim.operators.map((a): ScoreboardRow => ({
+    name: a.name,
+    score: '–',
+    kills: String(a.kills),
+    deaths: '–',
+    status: a.alive ? 'Active' : 'Down',
+  }));
+  return [you, ...allies];
+}
+
+// The per-frame extras: squad cards and minimap dots, the crosshair spread, the squad order key, and the Tab
+// scoreboard (shown while `scoreboard` is true).
+export function buildHudExtras(sim: SimWorld, env: HudEnv, scoreboard = false): HudExtras {
   return {
     operators: sim.operators.map((a): HudOperator => ({
       name: a.name,
@@ -208,6 +234,16 @@ export function buildHudExtras(sim: SimWorld, env: HudEnv): HudExtras {
     })),
     spread: sim.weapon.spread,
     orderKey: env.keyOf('order'),
+    scoreboard,
+    scoreboardRows: scoreboardRows(sim),
+    scoreboardFooter: scoreboardFooter({
+      hostiles: sim.enemies.reduce((n, e) => (e.alive ? n + 1 : n), 0),
+      captured: sim.zones.filter((z) => z.captured).length,
+      zones: sim.zones.length,
+      tickets: sim.enemyTickets,
+      mapName: env.mapName ?? '',
+      difficultyName: env.difficultyName ?? '',
+    }),
   };
 }
 

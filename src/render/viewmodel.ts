@@ -1,6 +1,7 @@
 // First-person weapon viewmodel: look-driven spring, reload dip, melee thrust and the scope gate.
 // Formulas and constants are copied from index.html:1890-1918 (update) and 3017-3018 (look input).
 // Pure module: no DOM, no randomness, no THREE.
+import { WEAPON_SWITCH_TIME } from '../sim/weapons';
 
 export interface ViewmodelState {
   // Spring-followed offset (x, y) with velocity, and its target (tx, ty) fed by look input.
@@ -48,8 +49,7 @@ const LOOK_LIMIT_X = 0.09;
 const LOOK_LIMIT_Y = 0.07;
 // index.html:1904
 const BOB_AMPLITUDE = 0.012;
-// index.html:1807 (switch time) and 3246 (melee time)
-const SWITCH_TIME = 0.35;
+// index.html:3246 (melee time). The switch time is WEAPON_SWITCH_TIME (index.html:1807).
 const MELEE_TIME = 0.3;
 // index.html:1901
 const SCOPE_ADS_THRESHOLD = 0.9;
@@ -108,7 +108,7 @@ export function gunPose(vm: ViewmodelState, input: GunPoseInput): GunPose {
     vm.rlAnim * 0.25 -
     by +
     vm.y * (1 - adsT * 0.7) -
-    (Math.max(0, switchT) / SWITCH_TIME) * 0.25;
+    (Math.max(0, switchT) / WEAPON_SWITCH_TIME) * 0.25;
   const z = lerp(-0.45, -0.34, adsT) + vm.gunKick * 0.05 - mel * 0.18;
 
   return {

@@ -94,7 +94,11 @@ export function tickWeapon(state: WeaponState, dt: number, firing: boolean, perk
   }
 }
 
-// Legacy: index.html:1804-1808. The 0.35 s switch time is the caller's job.
+// Legacy: index.html:1807 (P.switchT = 0.35). Fire is blocked until it runs out (index.html:1852).
+export const WEAPON_SWITCH_TIME = 0.35;
+
+// Legacy: index.html:1804-1808. Cancels a reload in progress on the weapon being put away. The switch time is set by
+// SimWorld.requestSwitch (WEAPON_SWITCH_TIME).
 // `next` stays in the signature so every switch passes both weapons; only `current` changes.
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
 export function switchTo(current: WeaponState, _next: WeaponState): void {

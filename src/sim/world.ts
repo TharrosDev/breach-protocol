@@ -4,7 +4,7 @@ import type { DifficultyDef } from '../content/difficulty';
 import { ENEMY_DEFS, type EnemyKindId } from '../content/enemies';
 import type { Action, GadgetId } from '../content/ids';
 import { AIRSTRIKE_AIM_DIST, type KillstreakId } from '../content/killstreaks';
-import type { Attachment, Perk, WeaponDef } from '../content/weapons';
+import { SIDEARM, type Attachment, type Perk, type WeaponDef } from '../content/weapons';
 import { RESPAWN_TIME } from '../content/tuning';
 import type { Command } from '../input/commands';
 import type { BoxId, CollisionWorld } from './collision';
@@ -37,8 +37,10 @@ import { edgeSpawn, enemyTypeForWave, guardLayout, waveTick, type WaveState } fr
 import {
   makeWeaponState,
   startReload,
+  switchTo,
   tickWeapon,
   tryFire,
+  WEAPON_SWITCH_TIME,
   type FireResult,
   type WeaponState,
 } from './weapons';
@@ -156,6 +158,9 @@ export interface PlayerRecord extends PlayerState {
 
 export type MatchOutcome = 'playing' | 'won' | 'lost';
 
+// The weapon slots: 0 is the primary, 1 is the sidearm (legacy P.inv, index.html:3432).
+export type WeaponSlot = 0 | 1;
+
 // Events for the render side and the HUD. Positions are world units.
 export type SimEvent =
   | { type: 'playerFire' }
@@ -204,7 +209,12 @@ export class SimWorld {
   readonly rng: Rng;
   // Capture zones in map order (objectives.ts). Their captured flags feed the AI and the waves.
   readonly zones: Zone[];
-  weapon: WeaponState;
+  // The two weapons (legacy P.inv): the loadout primary and the Viper sidearm. activeSlot is the one in hand (legacy
+  // P.cur). switchT counts down the weapon switch (legacy P.switchT); fire is blocked while it runs.
+  primary: WeaponState;
+  sidearm: WeaponState;
+  activeSlot: WeaponSlot = 0;
+  switchT = 0;
   enemies: Enemy[] = [];
   operators: Operator[] = [];
   // Grenades in flight (player and enemy) and smoke clouds. Smoke blocks sight and fire.
@@ -259,7 +269,8 @@ export class SimWorld {
     this.zones = opts.zones.map((z) => createZone(z));
     this.spawn0 = opts.spawns[0] ?? { x: opts.playerSpawn.x, z: opts.playerSpawn.z };
     this.player = newPlayerRecord(opts.playerSpawn, opts.playerYaw);
-    this.weapon = makeWeaponState(opts.weapon, opts.attachment);
+    this.primary = makeWeaponState(opts.weapon, opts.attachment);
+    this.sidearm = makeWeaponState(SIDEARM, 'none');
     this.resetMatch();
   }
 
@@ -282,6 +293,11 @@ export class SimWorld {
     const r = this.result;
     if (r === null) return 'playing';
     return r.win ? 'won' : 'lost';
+  }
+
+  // The weapon in hand (legacy curW, index.html:1297). Ammo, reload and spread read and write this object.
+  get weapon(): WeaponState {
+    return this.activeSlot === 0 ? this.primary : this.sidearm;
   }
 
   // Hostiles revealed right now: alive and with a spot above zero (UAV or drone). For the HUD.
@@ -314,10 +330,14 @@ export class SimWorld {
     if (cmd.pressed.has('reload') && p.alive) startReload(this.weapon, this.opts.perk);
     this.handlePresses(cmd.pressed, events);
 
-    // Legacy updWeapons (index.html:1841-1854): spread recovers, then a trigger pull fires.
-    tickWeapon(this.weapon, dt, cmd.buttons.fire, this.opts.perk);
+    // Legacy updWeapons (index.html:1839-1854): the switch timer runs down, both weapons tick (spread recovers unless
+    // the weapon in hand is firing), then a trigger pull fires the weapon in hand. Fire is blocked during a switch.
+    this.switchT = Math.max(0, this.switchT - dt);
+    const inHand = this.activeSlot;
+    tickWeapon(this.primary, dt, cmd.buttons.fire && inHand === 0, this.opts.perk);
+    tickWeapon(this.sidearm, dt, cmd.buttons.fire && inHand === 1, this.opts.perk);
     const trigger = fireClick || (cmd.buttons.fire && this.weapon.def.auto);
-    if (trigger && p.alive && !p.sprinting && p.sprintCool <= 0) {
+    if (trigger && p.alive && !p.sprinting && p.sprintCool <= 0 && this.switchT <= 0) {
       const shot = tryFire(this.weapon, {
         ads: cmd.buttons.ads,
         moving: p.moving,
@@ -419,7 +439,10 @@ export class SimWorld {
       z.status = 'idle';
     }
     this.matchState = 'play';
-    this.weapon = makeWeaponState(this.opts.weapon, this.opts.attachment);
+    this.primary = makeWeaponState(this.opts.weapon, this.opts.attachment);
+    this.sidearm = makeWeaponState(SIDEARM, 'none');
+    this.activeSlot = 0;
+    this.switchT = 0;
     Object.assign(this.player, newPlayerRecord(this.opts.playerSpawn, this.opts.playerYaw));
     const base = { x: this.opts.playerSpawn.x, z: this.opts.playerSpawn.z };
     this.operators = ([0, 1] as const).map((i) => createOperator(i, this.rng));
@@ -827,13 +850,24 @@ export class SimWorld {
     this.airstrikes = this.airstrikes.filter((s) => !s.done);
   }
 
-  // Loadout gadget presses (legacy gadget1, gadget2, interact, killstreak). Gadgets and the killstreak act on the
-  // sim step, so a press is consumed by the tick that reads it.
+  // Weapon keys, then loadout gadget presses (legacy weapon1, weapon2, gadget1, gadget2, interact, killstreak). Gadgets
+  // and the killstreak act on the sim step, so a press is consumed by the tick that reads it.
   private handlePresses(pressed: ReadonlySet<Action>, events: SimEvent[]): void {
+    if (pressed.has('weapon1')) this.requestSwitch(0);
+    if (pressed.has('weapon2')) this.requestSwitch(1);
     if (pressed.has('gadget1')) this.useGadgetSlot(0);
     if (pressed.has('gadget2')) this.useGadgetSlot(1);
     if (pressed.has('interact')) this.interact(events);
     if (pressed.has('killstreak')) this.useKillstreak(events);
+  }
+
+  // Puts a weapon in hand (legacy switchWeapon, index.html:1804-1808). Asking for the slot already in hand, or asking
+  // while a switch runs, does nothing. The switch cancels a reload in progress on the weapon being put away.
+  requestSwitch(slot: WeaponSlot): void {
+    if (slot === this.activeSlot || this.switchT > 0) return;
+    switchTo(this.weapon, slot === 0 ? this.primary : this.sidearm);
+    this.activeSlot = slot;
+    this.switchT = WEAPON_SWITCH_TIME;
   }
 
   // Uses a loadout gadget (gadgets.ts useGadget). Grenades join the flight list, the drone is stored until it ends.
@@ -851,8 +885,9 @@ export class SimWorld {
     if (!p.alive) return;
     const crate = nearestCrate(this.crates, p.pos);
     if (crate !== null) {
+      // Legacy resupply refills every weapon in the inventory (index.html:3228).
       const done = resupply(
-        { weapons: [this.weapon], gadgets: this.gadgets, breach: this.breach, player: p },
+        { weapons: [this.primary, this.sidearm], gadgets: this.gadgets, breach: this.breach, player: p },
         crate,
       );
       if (done) events.push({ type: 'resupplied' });
