@@ -3,4 +3,3 @@ node_modules/
 coverage/
 playwright-report/
 test-results/
-public/index.html
