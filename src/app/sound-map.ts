@@ -40,6 +40,9 @@ export function mapSimEventToSound(ev: SimEvent): SoundEvent | null {
     // useMedkit() (index.html:2007). The sim reports only uses that heal.
     case 'medkitUsed':
       return { type: 'pickup', kind: 'medkit' };
+    // Knife swing (legacy melee, index.html:3245). Plays on every swing, hit or miss.
+    case 'melee':
+      return { type: 'melee' };
     default:
       return null;
   }

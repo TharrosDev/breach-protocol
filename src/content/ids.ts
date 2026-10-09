@@ -23,7 +23,7 @@ export const GADGET_IDS = ['frag', 'flash', 'smoke', 'medkit', 'drone'] as const
 export type GadgetId = (typeof GADGET_IDS)[number];
 
 // index.html:533-563
-export const MAP_IDS = ['compound', 'substation'] as const;
+export const MAP_IDS = ['compound', 'substation', 'depot'] as const;
 export type MapId = (typeof MAP_IDS)[number];
 
 // index.html:578-584: the 17 rebindable actions, in the legacy order
