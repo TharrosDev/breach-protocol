@@ -1,0 +1,58 @@
+:root {
+  --bg: #070a10;
+  --ink: #e8eef8;
+  --mute: #8ea0ba;
+  --amber: #ffb020;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--ink);
+  font:
+    16px/1.5 'Segoe UI',
+    system-ui,
+    sans-serif;
+}
+
+.shell {
+  box-sizing: border-box;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 48px 16px;
+}
+
+.title {
+  font-size: 32px;
+  font-weight: 800;
+  margin: 0 0 16px;
+}
+
+.note {
+  color: var(--mute);
+}
+
+.primary {
+  background: var(--amber);
+  color: #111;
+  border: 0;
+  border-radius: 6px;
+  padding: 10px 18px;
+  font:
+    700 16px 'Segoe UI',
+    system-ui,
+    sans-serif;
+  cursor: pointer;
+}
+
+.primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.primary:focus-visible {
+  outline: 2px solid #58b7ff;
+  outline-offset: 2px;
+}

@@ -6,7 +6,7 @@
 
 **Architecture:** A fixed-step simulation in `src/sim/` with no DOM or three.js imports, a Three.js renderer in `src/render/`, a retained-DOM UI in `src/ui/`, and a Web Audio graph in `src/audio/`, wired together in `src/app/`. Content is typed TypeScript data. Backend is Vercel Functions plus Postgres, added last.
 
-**Tech Stack:** TypeScript (strict), Vite, Three.js 0.160.0 (pinned), Vitest, Playwright (Chromium, Edge, Firefox), axe-core, ESLint (flat) with typescript-eslint, Prettier, GitHub Actions, Vercel. Node 22 LTS, npm.
+**Tech Stack:** TypeScript (strict), Vite, Three.js 0.160.0 (pinned), Vitest, Playwright (Chromium, Edge, Firefox), axe-core, ESLint (flat) with typescript-eslint, Prettier, GitHub Actions, Vercel. Node 24 LTS (.nvmrc), npm.
 
 **Spec:** [2026-10-08-breach-protocol-rebuild-design.md](../specs/2026-10-08-breach-protocol-rebuild-design.md). The spec holds the full parity numbers (§1), stack rationale (§2), architecture (§3), quality bar (§4) and open decisions (§9). This plan argues from it.
 
@@ -37,15 +37,17 @@
 
 ## Phase 0: Foundation
 
-Work happens on branch `rebuild/p0-foundation`, PR into `rebuild`. `main` is not touched.
+Work happens on branch `rebuild-p0-foundation`, PR into `rebuild`. `main` is not touched.
 
 ### Task 0.1: Git setup and legacy preservation
 
 **Files:**
+
 - Modify: `breach-protocol/` (adds `.git`; no file content changes)
 - Move: `index.html` → `public/legacy/index.html`
 
 **Interfaces:**
+
 - Consumes: none
 - Produces: branch `rebuild` (from `origin/main`); `public/legacy/index.html` byte-identical to the current `index.html`
 
@@ -57,6 +59,7 @@ Expected: a hash; save it for step 4.
 - [ ] **Step 2: Initialise git and align with `origin/main` without changing files**
 
 Run:
+
 ```bash
 git init
 git remote add origin https://github.com/TharrosDev/breach-protocol.git
@@ -64,23 +67,27 @@ git fetch origin
 git reset --mixed origin/main
 git status
 ```
+
 Expected: `git status` lists only untracked `.gitignore`-excluded items or nothing; `index.html` is not reported modified.
 
 - [ ] **Step 3: Create the integration branch and the phase branch**
 
 Run:
+
 ```bash
 git checkout -b rebuild
-git checkout -b rebuild/p0-foundation
+git checkout -b rebuild-p0-foundation
 ```
 
 - [ ] **Step 4: Move the legacy file and verify**
 
 Run:
+
 ```bash
 mkdir -p public/legacy && git mv index.html public/legacy/index.html
 sha256sum public/legacy/index.html
 ```
+
 Expected: the hash matches step 1.
 
 - [ ] **Step 5: Commit**
@@ -93,10 +100,12 @@ git commit -m "chore: move legacy game to public/legacy" -m "Co-Authored-By: Cla
 ### Task 0.2: Toolchain
 
 **Files:**
+
 - Create: `package.json`, `tsconfig.json`, `vite.config.ts`, `eslint.config.js`, `.prettierrc.json`, `.nvmrc`, `index.html` (new app shell), `src/main.ts`
 - Modify: `.gitignore` (add `dist/`, `playwright-report/`, `test-results/`, `coverage/`)
 
 **Interfaces:**
+
 - Consumes: none
 - Produces: npm scripts `dev`, `build`, `preview`, `typecheck`, `lint`, `format`, `test` (Vitest), `test:e2e` (Playwright)
 
@@ -127,9 +136,11 @@ git commit -m "build: add Vite, TypeScript strict, ESLint and Prettier" -m "Co-A
 ### Task 0.3: App shell, capability check, boot test
 
 **Files:**
+
 - Create: `src/app/capabilities.ts`, `src/app/boot.ts`, `src/main.ts` (replace the stub), `tests/unit/capabilities.test.ts`, `tests/e2e/boot.spec.ts`, `playwright.config.ts`, `vitest.config.ts`
 
 **Interfaces:**
+
 - Consumes: none
 - Produces: `detectCapabilities(doc?: Document): { webgl2: boolean }`; `boot(root: HTMLElement): void` (shows the WebGL message screen when `webgl2` is false, otherwise the menu placeholder)
 
@@ -140,9 +151,10 @@ git commit -m "build: add Vite, TypeScript strict, ESLint and Prettier" -m "Co-A
 import { describe, it, expect } from 'vitest';
 import { detectCapabilities } from '../../src/app/capabilities';
 
-const fakeDoc = (ctx: unknown) => ({
-  createElement: () => ({ getContext: (type: string) => (type === 'webgl2' ? ctx : null) }),
-}) as unknown as Document;
+const fakeDoc = (ctx: unknown) =>
+  ({
+    createElement: () => ({ getContext: (type: string) => (type === 'webgl2' ? ctx : null) }),
+  }) as unknown as Document;
 
 describe('detectCapabilities', () => {
   it('reports webgl2 false when getContext returns null', () => {
@@ -176,8 +188,10 @@ import { test, expect } from '@playwright/test';
 
 test('app boots with no console errors', async ({ page }) => {
   const errors: string[] = [];
-  page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
-  page.on('pageerror', e => errors.push(e.message));
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
   await page.goto('/');
   await expect(page).toHaveTitle('Breach Protocol');
   await expect(page.getByRole('heading', { name: 'Breach Protocol' })).toBeVisible();
@@ -214,9 +228,11 @@ git commit -m "feat: app shell with WebGL2 check and boot E2E" -m "Co-Authored-B
 ### Task 0.4: CI workflow
 
 **Files:**
+
 - Create: `.github/workflows/ci.yml`
 
 **Interfaces:**
+
 - Consumes: npm scripts from Task 0.2; Playwright config from Task 0.3
 - Produces: required status checks `lint`, `typecheck`, `unit`, `build`, `e2e (chromium|firefox|msedge)`
 
@@ -234,16 +250,19 @@ Expected: no errors.
 ```bash
 git add -A
 git commit -m "ci: lint, typecheck, unit, build and E2E matrix" -m "Co-Authored-By: Claude Haiku 5.5 <noreply@anthropic.com>"
-git push -u origin rebuild/p0-foundation
+git push -u origin rebuild-p0-foundation
 ```
+
 Expected: the workflow runs on the PR once it is opened. Read the result with `gh run list`; do not poll.
 
 ### Task 0.5: Parity table skeleton and check script
 
 **Files:**
+
 - Create: `docs/parity.md`, `scripts/check-parity.ts`, `tests/unit/parity-check.test.ts`
 
 **Interfaces:**
+
 - Consumes: spec §1 section list
 - Produces: `docs/parity.md` with one row per §1 item: `| ID | Feature | Spec § | Test file |`. `scripts/check-parity.ts` exports `missingTests(rows): string[]`, listing rows whose test file does not exist.
 
@@ -277,7 +296,8 @@ git commit -m "test: parity table and coverage check" -m "Co-Authored-By: Claude
 **Files:** none (Vercel and verification)
 
 **Interfaces:**
-- Consumes: branch `rebuild/p0-foundation` pushed; Vercel project `breach-protocol` linked to GitHub
+
+- Consumes: branch `rebuild-p0-foundation` pushed; Vercel project `breach-protocol` linked to GitHub
 - Produces: preview URL serving the new shell at `/` and the legacy game at `/legacy/`
 
 - [ ] **Step 1: Confirm the Vercel project is Git-linked and builds previews**
@@ -286,7 +306,7 @@ Check the project's Git connection with the Vercel MCP (`get_project`). Expected
 
 - [ ] **Step 2: Open the PR and wait for the preview**
 
-Open PR `rebuild/p0-foundation` → `rebuild`. Expected: a preview deployment exists. Get its URL from the PR checks.
+Open PR `rebuild-p0-foundation` → `rebuild`. Expected: a preview deployment exists. Get its URL from the PR checks.
 
 - [ ] **Step 3: Verify in the browser**
 
@@ -301,14 +321,16 @@ Expected: `200`, and the body still contains the legacy title. Production is ser
 
 ## Phase 1: Simulation core
 
-Branch `rebuild/p1-sim`, PR into `rebuild`. Playable checkpoint: move, slide, jump, vault and shoot dummy targets on a boxed Compound.
+Branch `rebuild-p1-sim`, PR into `rebuild`. Playable checkpoint: move, slide, jump, vault and shoot dummy targets on a boxed Compound.
 
 ### Task 1.1: Fixed-step clock
 
 **Files:**
+
 - Create: `src/core/clock.ts`, `tests/unit/clock.test.ts`
 
 **Interfaces:**
+
 - Consumes: none
 - Produces: `class FixedStep { constructor(hz = 60, maxFrame = 0.25); advance(frameDt: number): number; readonly dt: number; alpha: number }`. `advance` returns steps to run; `alpha` is the leftover fraction for render interpolation.
 
@@ -319,7 +341,7 @@ Branch `rebuild/p1-sim`, PR into `rebuild`. Playable checkpoint: move, slide, ju
   - `alpha` stays in [0, 1).
 
 - [ ] **Step 2: Run to verify they fail**
-Run: `npx vitest run tests/unit/clock.test.ts`. Expected: FAIL.
+      Run: `npx vitest run tests/unit/clock.test.ts`. Expected: FAIL.
 
 - [ ] **Step 3: Implement** an accumulator. `dt` is `1 / hz`.
 
@@ -330,10 +352,12 @@ Run: `npx vitest run tests/unit/clock.test.ts`. Expected: FAIL.
 ### Task 1.2: Seeded RNG and no-random lint rule
 
 **Files:**
+
 - Create: `src/core/rng.ts`, `tests/unit/rng.test.ts`
 - Modify: `eslint.config.js` (ban `Math.random` under `src/sim/**`, `src/content/**`)
 
 **Interfaces:**
+
 - Consumes: none
 - Produces: `createRng(seed: number): Rng` with `next(): number` in [0, 1), `range(a: number, b: number): number`, `pick<T>(items: readonly T[]): T`, `fork(label: string): Rng`.
 
@@ -354,9 +378,11 @@ Run: `npx vitest run tests/unit/clock.test.ts`. Expected: FAIL.
 ### Task 1.3: Tuning constants
 
 **Files:**
+
 - Create: `src/content/tuning.ts`, `tests/unit/tuning.test.ts`
 
 **Interfaces:**
+
 - Consumes: spec §1.2 and §1.4
 - Produces: named exports with the legacy names in SCREAMING_SNAKE_CASE, for example `GRAVITY = 22`, `PLAYER_R = 0.35`, `CAPTURE_TIME = 7`, `ZONE_TICKET_COST = 35`, `RESPAWN_TIME = 4`, `ALLY_RESPAWN = 20`, `BLEEDOUT_TIME = 12`, `REVIVE_TIME = 2.5`, `VAULT_TIME = 0.35`, `SLIDE_TIME = 0.85`, `UAV_TIME = 20`, `TURRET_TIME = 45`, `WALL_H = 4.2`, `YAW_PER_PX = 0.0022`.
 
@@ -369,9 +395,11 @@ Run: `npx vitest run tests/unit/clock.test.ts`. Expected: FAIL.
 ### Task 1.4: Collision world and raycasts
 
 **Files:**
+
 - Create: `src/sim/collision.ts`, `tests/unit/collision.test.ts`
 
 **Interfaces:**
+
 - Consumes: `tuning.ts`
 - Produces:
   - `type Aabb = { min: Vec3; max: Vec3 }` (`Vec3` is `{ x, y, z }`)
@@ -393,9 +421,11 @@ Run: `npx vitest run tests/unit/clock.test.ts`. Expected: FAIL.
 ### Task 1.5: Ballistics
 
 **Files:**
+
 - Create: `src/sim/ballistics.ts`, `tests/unit/ballistics.test.ts`
 
 **Interfaces:**
+
 - Consumes: `WeaponDef` shape from `src/content/weapons.ts` (created in this task with the six weapons from spec §1.3)
 - Produces:
   - `falloff(distance: number, range: number): number` — 1 up to `range/2`, linear to `0.7` at `range`, clamped beyond
@@ -417,9 +447,11 @@ Run: `npx vitest run tests/unit/clock.test.ts`. Expected: FAIL.
 ### Task 1.6: Weapon state machine
 
 **Files:**
+
 - Create: `src/sim/weapons.ts`, `tests/unit/weapons.test.ts`
 
 **Interfaces:**
+
 - Consumes: `WeaponDef`, `hitDamage`, `spreadFor`
 - Produces:
   - `makeWeaponState(def: WeaponDef, attachment: Attachment): WeaponState`
@@ -445,9 +477,11 @@ Run: `npx vitest run tests/unit/clock.test.ts`. Expected: FAIL.
 ### Task 1.7: Persistence and bindings
 
 **Files:**
+
 - Create: `src/persist/store.ts`, `src/persist/schema.ts`, `src/input/bindings.ts`, `tests/unit/store.test.ts`, `tests/unit/bindings.test.ts`
 
 **Interfaces:**
+
 - Consumes: `content` action list (17 actions from spec §1.6)
 - Produces:
   - `loadSettings(storage?: Storage): Settings` and `saveSettings(s: Settings, storage?: Storage): void`; same shape for `loadLoadout`, `loadBindings`, `saveBindings`
@@ -471,9 +505,11 @@ Run: `npx vitest run tests/unit/clock.test.ts`. Expected: FAIL.
 ### Task 1.8: Input adapter and pointer lock
 
 **Files:**
+
 - Create: `src/input/keyboard.ts`, `src/input/mouse.ts`, `src/input/pointer-lock.ts`, `src/input/commands.ts`, `tests/unit/commands.test.ts`, `tests/unit/pointer-lock.test.ts`
 
 **Interfaces:**
+
 - Consumes: `Bindings` from Task 1.7
 - Produces:
   - `type Command = { move: { fwd: -1 | 0 | 1; strafe: -1 | 0 | 1 }; look: { dx: number; dy: number }; buttons: { fire: boolean; ads: boolean }; pressed: Set<Action> }`
@@ -494,9 +530,11 @@ Run: `npx vitest run tests/unit/clock.test.ts`. Expected: FAIL.
 ### Task 1.9: Fixed-step simulation and minimal renderer
 
 **Files:**
+
 - Create: `src/sim/world.ts`, `src/sim/movement.ts`, `src/sim/vault.ts`, `src/content/maps/compound.ts`, `src/content/maps/types.ts`, `src/render/renderer.ts`, `src/render/boxes.ts`, `src/app/game.ts`, `src/app/debug-hook.ts`, `tests/unit/movement.test.ts`, `tests/e2e/play-smoke.spec.ts`
 
 **Interfaces:**
+
 - Consumes: `FixedStep` (1.1), `CollisionWorld` (1.4), `tuning` (1.3), `Command` (1.8), `WeaponState` (1.6)
 - Produces:
   - `type PlayerState = { pos: Vec3; vel: Vec3; yaw: number; pitch: number; onGround: boolean; crouch: boolean; sliding: number; stamina: number; hp: number; alive: boolean }`
@@ -533,7 +571,8 @@ test('deploy, move, fire at a dummy', async ({ page }) => {
   const z1 = await page.evaluate(() => (window as any).__bp.P.pos.z);
   expect(Math.abs(z1)).toBeGreaterThan(3);
   const shots = await page.evaluate(() => (window as any).__bp.shotsFired ?? 0);
-  await page.mouse.down(); await page.mouse.up();
+  await page.mouse.down();
+  await page.mouse.up();
   const after = await page.evaluate(() => (window as any).__bp.shotsFired ?? 0);
   expect(after).toBeGreaterThan(shots);
 });
@@ -542,11 +581,11 @@ test('deploy, move, fire at a dummy', async ({ page }) => {
 Note: the Deploy/Launch flow depends on the phase-5 shell. In P1 the test drives the minimal shell that Task 1.9 adds (a single "Deploy" button). Rewrite the steps in P5 when the real screens land.
 
 - [ ] **Step 6: Run the smoke test on all three browsers.**
-Run: `npx playwright test tests/e2e/play-smoke.spec.ts`
-Expected: PASS on chromium, firefox, msedge.
+      Run: `npx playwright test tests/e2e/play-smoke.spec.ts`
+      Expected: PASS on chromium, firefox, msedge.
 
 - [ ] **Step 7: Deploy the preview and verify**
-Open the preview in the built-in browser, deploy, walk and fire. Take a screenshot. Report the result with the screenshot.
+      Open the preview in the built-in browser, deploy, walk and fire. Take a screenshot. Report the result with the screenshot.
 
 - [ ] **Step 8: Commit** `feat(sim): fixed-step player movement and minimal renderer`.
 
@@ -557,6 +596,7 @@ Open the preview in the built-in browser, deploy, walk and fire. Take a screensh
 Each phase starts with its own bite-sized plan, written from the spec section named here. Each ends with the gate listed.
 
 ### Phase 2: Rendering and maps (spec §1.7, §4)
+
 - **Maps as data.** `content/maps/compound.ts` and `substation.ts` as typed `MapDef`s with the buildings, cover, zones, props and fog values from `index.html:533–563`. Map builder `render/map-builder.ts`: `buildMap(def, scene, world): MapHandle`. Validator test for the five invariants in spec §5, run for both maps.
 - **Post and lighting.** `render/post.ts` (bloom 0.22 / 0.5 / 0.92, OutputPass, RoomEnvironment through PMREM). `render/quality.ts` tiers: High and Low, grass 900 / 260, lamps 6, rain on Substation High only. Auto-downgrade governor (FPS < 38 for 5 s) as a pure function, unit tested.
 - **Props and FX.** Grass (instanced), lamps (glow sprites), contact shadows, rain (`render/rain.ts`), debris (max 90), holes (max 80), casings (max 24), particle pool (500), tracers, shockwave.
@@ -565,6 +605,7 @@ Each phase starts with its own bite-sized plan, written from the spec section na
 - **Gate:** both maps screenshot-compared at High and Low; FPS benchmark recorded on the reference machine (§9.3); bundle size measured and the budget written into the spec.
 
 ### Phase 3: AI, squad, waves (spec §1.5)
+
 - **Navigation.** `sim/nav/grid.ts`: 120×120 walkability from `CollisionWorld`; A* with an 8000-iteration cap and a per-tick budget of 2 searches. Test: path on Compound avoids every collider; path exists between each spawn and each zone.
 - **Hostile AI.** `sim/ai/hostile.ts`: state machines (Guard, Hunt, Engage, TakeCover, Flank, Retreat). `sim/ai/perception.ts`: sight by type, Ghost ×0.7, LOS via raycast, smoke blocks LOS. `sim/ai/cover.ts`: 12 samples, 3–8 m, out of sight. Tests: sniper stays in the 28–40 m band; under 45% hp the hostile seeks cover; intel shares within 18 m; separation 0.9 m.
 - **Grenadiers.** Throw at 5–24 m with LOS, cooldown 9–12 s; arc from `index.html:1938–1944`.
@@ -573,6 +614,7 @@ Each phase starts with its own bite-sized plan, written from the spec section na
 - **Gate:** a seeded 60 s scenario on Compound with no exceptions and with each hostile type observed.
 
 ### Phase 4: Match rules (spec §1.1, §1.3, §1.4)
+
 - **Objectives.** `sim/objectives.ts`: capture 7 s, decay ×0.6 time, contested rule, +250 bonus, radius 4.2.
 - **Tickets and match.** `sim/tickets.ts` (kill −1, zone −35, win at 0 or all zones, loss at zero reinforcements); `sim/match.ts` state machine (menu → brief → play ⇄ paused → over).
 - **Killstreaks.** `sim/killstreaks.ts`: awards at 3 / 5 / 7; UAV 20 s; Sentry (12 dmg per 0.12 s, range 40, 45 s); Airstrike (5 blasts, timing 300 + k·260 ms). Placement rule: nearest clear ground 8, 6, 4, 2 m ahead.
@@ -581,6 +623,7 @@ Each phase starts with its own bite-sized plan, written from the spec section na
 - **Gate:** Vitest scenarios for win by tickets, win by capture, loss by reinforcements; E2E win and loss using debug seams.
 
 ### Phase 5: Shell and HUD (spec §1.6, §4, §5)
+
 - **Screens.** `ui/screens/`: menu, brief, loadout, settings (Controls, Mouse, Display, Audio), pause, debrief. Same copy and layout as `index.html:256–414`, with the text rules fixed (§1.8).
 - **Focus.** `ui/focus.ts`: focus moves to the first control on every screen change; Esc goes back; roving tabindex for option grids; visible focus ring. Keyboard-only E2E path through every screen.
 - **HUD.** `ui/hud/`: retained DOM bindings reading a read-only sim view. Same layout as `index.html:182–249`. Colour tokens from `ui/tokens.ts` with a colour-blind variant for every hostile, zone, health and hit colour. Test asserts all tokens exist in both modes.
@@ -590,12 +633,14 @@ Each phase starts with its own bite-sized plan, written from the spec section na
 - **Gate:** every screen reachable and usable by keyboard; visual baselines reviewed by the user.
 
 ### Phase 6: Audio (spec §1.7)
+
 - **Graph.** `audio/graph.ts`: master, sfx, ui and ambience buses, `DynamicsCompressorNode` limiter, gain from settings, mute toggle. Context created on first user gesture (matches `index.html:1318`).
 - **Synth.** `audio/synth.ts`: the legacy `noise` and `tone` recipes, routed through buses. Pick sounds per event (gunfire by weapon, explosions, pickups, hits, kill tones).
 - **Tests.** Unit: bus routing with a fake context. E2E: volume and mute persist; no audio errors in console.
 - **Gate:** volume and mute persist; user approves the mix by ear.
 
 ### Phase 7: Quality gate and cutover (spec §4)
+
 - **Benchmark.** Scripted 60 s scenario on Compound at High and Low with a seeded squad; frame-time p95 recorded on the reference machine (§9.3).
 - **Matrix.** Full E2E on Chromium, Edge and Firefox. Parity gate: `scripts/check-parity.ts` becomes a hard CI failure.
 - **Accessibility pass.** axe-core clean on every screen; keyboard-only path passes; colour-blind tokens reviewed.
@@ -603,6 +648,7 @@ Each phase starts with its own bite-sized plan, written from the spec section na
 - **Cutover.** PR `rebuild` → `main`, merged only with your explicit approval. Legacy stays at `/legacy/`. README updated (controls, hosting, tests). Rollback is redeploying the previous `main` commit.
 
 ### Phase 8: Backend (spec §2, §9.4)
+
 - **Provisioning.** Only after approval (§9.4). Postgres from the Vercel Marketplace; connection string stored as a Vercel environment variable, never in the repo.
 - **API.** `api/scores.ts` (POST match result, GET leaderboard), `api/health.ts`. Validation with a schema; rate limiting per anonymous ID.
 - **Match token.** Server issues a short-lived signed match token at match start; results without a valid token are stored unranked.

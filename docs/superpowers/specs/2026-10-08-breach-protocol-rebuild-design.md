@@ -13,22 +13,24 @@ The current file is treated as a spec. Its numbers are the parity oracle; its st
 Everything below must work after the rebuild. Numbers are copied from the current file and become test expectations.
 
 ### 1.1 Match and objectives
+
 - Two maps. **Compound**: fog 55–150, zones ALPHA (-29,-28), BRAVO (29,-28), CHARLIE (1,22); breachable walls; 55 crates, 14 barrels, 8 sandbags. **Substation**: fog 65–170, zones CONTROL (0,-20), GENERATOR (0,30), TRANSFORMER (-37,31); night sky with stars and rain (High only); 40 crates, 12 barrels, 6 sandbags.
 - Zone radius 4.2 m. Capture takes 7 s with only friendlies inside. Contested zones decay at 0.6× the capture rate. Capturing a zone costs the enemy 35 tickets. A player inside at capture earns +250.
 - Enemy tickets: each hostile killed costs 1. Win when tickets reach 0 or every zone is captured.
 - Lose when the player dies with no reinforcements left.
 - Difficulty (hp × / dmg × / reinforcements / max hostiles / wave timer / tickets):
 
-| Level | HP | Dmg | Lives | Max hostiles | Wave timer | Tickets |
-|---|---|---|---|---|---|---|
-| Recruit | 0.7 | 0.6 | 5 | 14 | 16 | 100 |
-| Veteran | 1.0 | 1.0 | 3 | 22 | 14 | 150 |
-| Elite | 1.35 | 1.35 | 2 | 30 | 11 | 200 |
+| Level   | HP   | Dmg  | Lives | Max hostiles | Wave timer | Tickets |
+| ------- | ---- | ---- | ----- | ------------ | ---------- | ------- |
+| Recruit | 0.7  | 0.6  | 5     | 14           | 16         | 100     |
+| Veteran | 1.0  | 1.0  | 3     | 22           | 14         | 150     |
+| Elite   | 1.35 | 1.35 | 2     | 30           | 11         | 200     |
 
 - Waves: count `min(2 + floor(wave/2), 6)`. Wave timer `max(6, base - 0.7·wave)`. Type by wave: grenadier (wave ≥ 4, roll < 0.18), sniper (wave ≥ 2, roll < 0.30), heavy (wave ≥ 3, roll < 0.50), otherwise rifle. Spawns on a ring of radius 50–55 m.
 - Four guards per zone at spawn, guard sight capped at 26 m.
 
 ### 1.2 Player movement
+
 - Walk 4.9 m/s, crouch 2.3, sprint 7.4 (8.6 with Lightweight). Sprint needs forward input, not crouched, not aiming, not firing, stamina > 0.02, grounded. A 0.35 s cooldown follows a sprint.
 - Ground control rate 10, air control rate 3.5. Gravity 22. Jump velocity 7.2. Coyote time 0.12 s. Jump buffer 0.12 s.
 - Slide: starts from crouch while sprinting if speed ≥ 4. Lasts 0.85 s. Speed `max(speed, 8.5)` decaying linearly. Eye height 0.6 while sliding, 0.95 crouched, 1.65 standing. Camera rolls 0.09 rad.
@@ -39,7 +41,9 @@ Everything below must work after the rebuild. Numbers are copied from the curren
 - Camera: FOV 75 default (60–110). ADS FOV per weapon (VX 55, K-Vector 60, Breaker 60, Hammer 55, Warden 35, Pistol 60). Sprint adds +4° FOV. Head bob 0.035 m (ADS ×0.3). ADS speed 17 with Reflex, 12 without. ADS slows movement ×0.6.
 
 ### 1.3 Weapons, ballistics, attachments, perks
+
 Weapons (dmg / headshot ×/ rpm / mag / reserve / reload s / spread / spread max / spread gain / recoil / range m / auto):
+
 - VX-9 Rifle: 24 / 2.5 / 690 / 30 / 150 / 2.1 / 0.010 / 0.045 / 0.005 / 0.008 / 200 / auto
 - K-Vector SMG: 17 / 2.2 / 900 / 36 / 216 / 1.8 / 0.018 / 0.060 / 0.003 / 0.005 / 90 / auto
 - Breaker Shotgun: 11 / 1.0 / 70 / 6 / 36 / 2.6 / 0.050 / 0.070 / 0 / 0.050 / 45 / semi, 9 pellets
@@ -56,12 +60,14 @@ Weapons (dmg / headshot ×/ rpm / mag / reserve / reload s / spread / spread max
 - Melee knife (Q): 1.7 m cone, cooldown 0.9 s, 0.3 s animation; 150 damage from behind, 80 from the front.
 
 ### 1.4 Killstreaks and breach
+
 - Streak rewards at 3 / 5 / 7 consecutive kills, used with H: UAV (20 s, reveals hostiles); Sentry turret (45 s, 12 dmg per shot, range 40 m, fires every 0.12 s, placed on clear ground 2–8 m ahead); Airstrike (5 blasts radius 5 m across a 12 m box, 300 ms + k·260 ms, 130 dmg falloff, 70 to the player).
 - Breach charge (E, on a reinforced wall): 2 per life, arms in 2.2 s, radius 4.5 m, 110 to hostiles and 60 to the player at the centre, falloff linear.
 - Crates: E resupplies ammo, gadgets, charges, hp and stamina. 30 s cooldown per crate.
 - Score: kill 100 (+50 headshot), revive +150, zone capture +250 for the player present.
 
 ### 1.5 Hostiles and squad
+
 - Enemies (hp / dmg / fire interval s / accuracy / speed / sight m):
   - Rifleman: 60 / 8 / 0.45 / 0.05 / 3.1 / 50
   - Heavy (shield, slow): 150 / 13 / 0.75 / 0.035 / 2.0 / 45
@@ -73,6 +79,7 @@ Weapons (dmg / headshot ×/ rpm / mag / reserve / reload s / spread / spread max
 - Downed player: nearby operator (within 18 m) revives after 2.5 s within 2.2 m. Bleedout 12 s. Otherwise eliminated and respawn after 4 s on a squadmate if clear, else at the spawn farthest from hostiles. Dead operators respawn after 20 s.
 
 ### 1.6 Settings, bindings, persistence
+
 - Settings tabs. **Controls**: 17 rebindable actions (move ×4, jump, crouch, sprint, reload, weapon 1/2, gadget 1/2, interact, melee, order, killstreak, scoreboard). Click, press a key, Esc cancels. Taking a key in use swaps the two. Reset defaults. **Mouse**: sensitivity 0.1–3, ADS multiplier 0.2–1.2, DPI (400/800/1600/3200) for a cm-per-360 calculator, invert Y. **Display**: FOV, quality High/Low, FPS counter, screen shake, colour-blind zone colours. **Audio**: master volume 0–1.
 - Mouse look: `YAW_PER_PX` 0.0022, scaled by sensitivity and lerped to the ADS multiplier by ADS progress.
 - Storage keys (must keep reading these): `bp_settings`, `bp_loadout`, `bp_binds`, `bp_intro` (one-time control hints). Storage blocked → game works, settings don't persist.
@@ -80,6 +87,7 @@ Weapons (dmg / headshot ×/ rpm / mag / reserve / reload s / spread / spread max
 - Debug hook: `?debug` exposes internals to tests. Keep it behind the flag.
 
 ### 1.7 Visuals and audio
+
 - Renderer: ACES filmic tone mapping, exposure 1.05, PCF soft shadows, 2048 sun shadow map. Hemisphere light and directional sun per map.
 - High quality only: UnrealBloom (strength 0.22, radius 0.5, threshold 0.92), RoomEnvironment reflections via PMREM, 900 grass tufts (Low: 260), 6 street lamps with glow sprites, rain on Substation (600 streaks).
 - Always on: gradient sky dome, bullet holes (max 80), casings (max 24), debris (max 90), particle pool (500), explosion shockwave, muzzle flash sprite and point light, tracers, blood/hit feedback, hit markers, damage direction indicators, whiteout and vignette on hurt.
@@ -88,6 +96,7 @@ Weapons (dmg / headshot ×/ rpm / mag / reserve / reload s / spread / spread max
 - Procedural Web Audio only: noise and tone synthesis for gunfire, explosions, pickups and hits. Master gain from settings.
 
 ### 1.8 Known defects to fix, not preserve
+
 - `Math.random` everywhere and frame-rate-dependent updates. Gameplay can't be replayed or tested deterministically.
 - Menus can't be fully used from the keyboard. Screen changes don't move focus. Esc doesn't go back consistently.
 - Uppercase, letter-spaced labels at 12 px in the HUD and menus. Some are body-length text.
@@ -102,23 +111,23 @@ Weapons (dmg / headshot ×/ rpm / mag / reserve / reload s / spread / spread max
 
 ## 2. Target stack
 
-| Concern | Choice | Why |
-|---|---|---|
-| Language and build | TypeScript (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`), Vite, ES modules, Node 22 LTS, npm | Matches the request. npm avoids a second package manager in CI and on Vercel. |
-| Renderer | `three` from npm, **pinned to 0.160.0** through the parity phase. Upgrade is a separate, later task. Post-processing from `three/examples/jsm` (EffectComposer, UnrealBloomPass, OutputPass, RoomEnvironment) | Keeps the lighting and tone mapping the current look depends on. Upgrading three changes both. No CDN at runtime. |
-| Simulation | Fixed 60 Hz step with an accumulator and render interpolation. Seeded PRNG (sfc32) for all gameplay randomness. No `Math.random` in `sim/` (lint rule). | Deterministic enough for replays, tests and later netcode. Frame rate can't change outcomes. |
-| Entities | Small hand-written ECS: integer entity IDs, typed component stores, ordered systems | Components can be diffed and snapshotted for netcode. Avoids a class hierarchy for 40+ hostile and operator behaviours. |
-| Collision and navigation | Axis-aligned boxes as today. Grid A* (120×120 cells, 1 m, 8-way, corner-cutting blocked) instead of a navmesh | Every map is a set of boxes. The current grid works and is cheap to validate. A navmesh buys nothing here. |
-| AI | Explicit state machines per role (Guard, Hunt, Engage, TakeCover, Flank, Retreat, Revive). Utility scores pick targets and cover. | Keeps the current behaviour readable and testable. A behaviour tree is more machinery than this needs. |
-| HUD and menus | Retained DOM with a small binding layer. Shared focus manager for menus. No framework. | The HUD is about 40 elements updated per frame. A framework adds weight and reconciliation for no gain. |
-| Audio | Web Audio graph with buses (master → sfx, ui, ambience) and a compressor limiter. SFX stay procedural (no assets). | The sounds are synthesized now. Assets are added only where synthesis doesn't sound right. |
-| Maps and content | TypeScript modules typed as `MapDef`, `WeaponDef`, `EnemyDef`, plus `tuning.ts` holding every constant from §1 | Type checking catches broken references. A validator test checks map invariants (§5). |
-| Persistence | Versioned schema on the existing localStorage keys. Validation falls back per field to defaults. | Existing players keep their settings and bindings. Bad data can't crash start-up. |
-| Testing | Vitest for `sim/`, `content/`, `persist/`, `input/`. Playwright for E2E and visual regression, projects: Chromium, Edge (channel `msedge`), Firefox. axe-core for accessibility. | Pure simulation tests run without a browser. E2E covers what a browser must do. |
-| Lint and format | ESLint flat config with typescript-eslint, `import/no-cycle`, and a boundary rule (`sim/` cannot import `render/`, `ui/`, `audio/` or the DOM). Prettier. | Enforces the layer split in §3. |
-| CI | GitHub Actions: lint, typecheck, unit, build, E2E matrix. Playwright traces and screenshots uploaded on failure. | Required before merge. |
-| Hosting | Vercel Git integration (already linked to `main`). Preview per branch and PR. Production only from `main`. Legacy build kept at `/legacy/`. | Rollback is one redeploy of the legacy file. |
-| Backend (phase 8) | Vercel Functions in `api/` (TypeScript). Postgres from the Vercel Marketplace (Neon). Anonymous player IDs (random UUID, stored locally). Server-issued match token. | Serverless fits the traffic. Anonymous IDs need no sign-in. |
+| Concern                  | Choice                                                                                                                                                                                                        | Why                                                                                                                     |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Language and build       | TypeScript (`strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`), Vite, ES modules, Node 22 LTS, npm                                                                                           | Matches the request. npm avoids a second package manager in CI and on Vercel.                                           |
+| Renderer                 | `three` from npm, **pinned to 0.160.0** through the parity phase. Upgrade is a separate, later task. Post-processing from `three/examples/jsm` (EffectComposer, UnrealBloomPass, OutputPass, RoomEnvironment) | Keeps the lighting and tone mapping the current look depends on. Upgrading three changes both. No CDN at runtime.       |
+| Simulation               | Fixed 60 Hz step with an accumulator and render interpolation. Seeded PRNG (sfc32) for all gameplay randomness. No `Math.random` in `sim/` (lint rule).                                                       | Deterministic enough for replays, tests and later netcode. Frame rate can't change outcomes.                            |
+| Entities                 | Small hand-written ECS: integer entity IDs, typed component stores, ordered systems                                                                                                                           | Components can be diffed and snapshotted for netcode. Avoids a class hierarchy for 40+ hostile and operator behaviours. |
+| Collision and navigation | Axis-aligned boxes as today. Grid A* (120×120 cells, 1 m, 8-way, corner-cutting blocked) instead of a navmesh                                                                                                 | Every map is a set of boxes. The current grid works and is cheap to validate. A navmesh buys nothing here.              |
+| AI                       | Explicit state machines per role (Guard, Hunt, Engage, TakeCover, Flank, Retreat, Revive). Utility scores pick targets and cover.                                                                             | Keeps the current behaviour readable and testable. A behaviour tree is more machinery than this needs.                  |
+| HUD and menus            | Retained DOM with a small binding layer. Shared focus manager for menus. No framework.                                                                                                                        | The HUD is about 40 elements updated per frame. A framework adds weight and reconciliation for no gain.                 |
+| Audio                    | Web Audio graph with buses (master → sfx, ui, ambience) and a compressor limiter. SFX stay procedural (no assets).                                                                                            | The sounds are synthesized now. Assets are added only where synthesis doesn't sound right.                              |
+| Maps and content         | TypeScript modules typed as `MapDef`, `WeaponDef`, `EnemyDef`, plus `tuning.ts` holding every constant from §1                                                                                                | Type checking catches broken references. A validator test checks map invariants (§5).                                   |
+| Persistence              | Versioned schema on the existing localStorage keys. Validation falls back per field to defaults.                                                                                                              | Existing players keep their settings and bindings. Bad data can't crash start-up.                                       |
+| Testing                  | Vitest for `sim/`, `content/`, `persist/`, `input/`. Playwright for E2E and visual regression, projects: Chromium, Edge (channel `msedge`), Firefox. axe-core for accessibility.                              | Pure simulation tests run without a browser. E2E covers what a browser must do.                                         |
+| Lint and format          | ESLint flat config with typescript-eslint, `import/no-cycle`, and a boundary rule (`sim/` cannot import `render/`, `ui/`, `audio/` or the DOM). Prettier.                                                     | Enforces the layer split in §3.                                                                                         |
+| CI                       | GitHub Actions: lint, typecheck, unit, build, E2E matrix. Playwright traces and screenshots uploaded on failure.                                                                                              | Required before merge.                                                                                                  |
+| Hosting                  | Vercel Git integration (already linked to `main`). Preview per branch and PR. Production only from `main`. Legacy build kept at `/legacy/`.                                                                   | Rollback is one redeploy of the legacy file.                                                                            |
+| Backend (phase 8)        | Vercel Functions in `api/` (TypeScript). Postgres from the Vercel Marketplace (Neon). Anonymous player IDs (random UUID, stored locally). Server-issued match token.                                          | Serverless fits the traffic. Anonymous IDs need no sign-in.                                                             |
 
 **Rejected:** Phaser or Babylon (rewrite the renderer with no feel gain); React or Svelte for HUD (overhead); WebGPU (not in the browser matrix); JSON map files (lose type checking; validator covers the same ground).
 
@@ -158,19 +167,19 @@ tests/e2e      Playwright specs and screenshot baselines
 
 ## 4. Quality bar and how it is verified
 
-| Requirement | Verification | Honest limit |
-|---|---|---|
-| No regressions | Parity table (`docs/parity.md`) maps each §1 item to a test. A script fails CI if a row has no test file. | Parity of feel is judged by a person playing both builds side by side. Automated tests check numbers, not feel. |
-| ≥ 60 fps on mid-range hardware at High | Scripted 60 s benchmark on Compound with a seeded squad. Frame-time p95 recorded in each phase's PR. | Headless CI renders with SwiftShader, which is not representative. Real numbers need real hardware, so the reference machine is an open decision (§9). |
-| Low is a real fallback | Benchmark at Low, same scenario. Low has no bloom, reflections, shadows, lamps or rain. | Same as above. |
-| Auto-downgrade kept | Unit test on the FPS governor: 5 s below 38 fps triggers Low once. | None. |
-| Accessibility: keyboard-complete menus | Playwright keyboard-only path through every screen. axe-core on every screen. | Screen reader behaviour is spot-checked by hand, not automated. |
-| Colour-blind palette | Every hostile, zone, health and hit colour comes from a token with a colour-blind variant. Test asserts all tokens exist in both modes. | Visual check by a person with a CVD simulation filter. |
-| Text ≥ 12 px, no all-caps body, no wide tracking on body | Playwright computed-style test over every text node on each screen. Fails on violations. | Labels in the HUD may use uppercase only if they are three words or fewer. |
-| Chrome, Edge, Firefox | Playwright projects for all three on every PR. | Safari is out of scope. |
-| WebGL fallback | WebGL2 check at boot. Without it, a message screen with a retry link. Context loss shows a recovery notice and restores. | Context loss is hard to reproduce. Unit test on the handler, plus one manual check. |
-| Pointer lock fallback | On refusal or unexpected exit, pause with "Click to resume" and clear held inputs. | None. |
-| Keyboard and mouse only | Touch is not supported and is not tested. | Stated, not hidden. |
+| Requirement                                              | Verification                                                                                                                            | Honest limit                                                                                                                                           |
+| -------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| No regressions                                           | Parity table (`docs/parity.md`) maps each §1 item to a test. A script fails CI if a row has no test file.                               | Parity of feel is judged by a person playing both builds side by side. Automated tests check numbers, not feel.                                        |
+| ≥ 60 fps on mid-range hardware at High                   | Scripted 60 s benchmark on Compound with a seeded squad. Frame-time p95 recorded in each phase's PR.                                    | Headless CI renders with SwiftShader, which is not representative. Real numbers need real hardware, so the reference machine is an open decision (§9). |
+| Low is a real fallback                                   | Benchmark at Low, same scenario. Low has no bloom, reflections, shadows, lamps or rain.                                                 | Same as above.                                                                                                                                         |
+| Auto-downgrade kept                                      | Unit test on the FPS governor: 5 s below 38 fps triggers Low once.                                                                      | None.                                                                                                                                                  |
+| Accessibility: keyboard-complete menus                   | Playwright keyboard-only path through every screen. axe-core on every screen.                                                           | Screen reader behaviour is spot-checked by hand, not automated.                                                                                        |
+| Colour-blind palette                                     | Every hostile, zone, health and hit colour comes from a token with a colour-blind variant. Test asserts all tokens exist in both modes. | Visual check by a person with a CVD simulation filter.                                                                                                 |
+| Text ≥ 12 px, no all-caps body, no wide tracking on body | Playwright computed-style test over every text node on each screen. Fails on violations.                                                | Labels in the HUD may use uppercase only if they are three words or fewer.                                                                             |
+| Chrome, Edge, Firefox                                    | Playwright projects for all three on every PR.                                                                                          | Safari is out of scope.                                                                                                                                |
+| WebGL fallback                                           | WebGL2 check at boot. Without it, a message screen with a retry link. Context loss shows a recovery notice and restores.                | Context loss is hard to reproduce. Unit test on the handler, plus one manual check.                                                                    |
+| Pointer lock fallback                                    | On refusal or unexpected exit, pause with "Click to resume" and clear held inputs.                                                      | None.                                                                                                                                                  |
+| Keyboard and mouse only                                  | Touch is not supported and is not tested.                                                                                               | Stated, not hidden.                                                                                                                                    |
 
 **Bundle:** the budget is set from measured sizes at the end of phase 2. It is not guessed here.
 
@@ -212,17 +221,17 @@ tests/e2e      Playwright specs and screenshot baselines
 
 ## 8. Phase order
 
-| Phase | Deliverable | Playable build means |
-|---|---|---|
-| **P0 Foundation** | Toolchain, CI, Vitest and Playwright harness, legacy preserved at `/legacy/`, parity table skeleton, preview deploy | App boots to a menu with WebGL2 check and the legacy game reachable |
-| **P1 Simulation core** | Fixed step, seeded RNG, movement, collision, ballistics, weapons, bindings, persistence, input, minimal renderer | Move, slide, jump, vault, and shoot dummy targets on a boxed Compound |
-| **P2 Rendering and maps** | Both maps as data, map builder, post-processing, grass, lamps, rain, debris, viewmodel springs, quality tiers and auto-downgrade | Both maps render with the current look at High and Low |
-| **P3 AI, squad, waves** | Hostile state machines, perception, cover, flank, sniper band, grenadiers, operators and orders, revives, waves | Full hostile waves fight back; operators take and hold zones |
-| **P4 Match rules** | Objectives, capture and decay, tickets, win/lose, killstreaks, gadgets, breach charges, scoring, match state machine | A full match can be won and lost |
-| **P5 Shell and HUD** | Menus, brief, loadout, settings, pause, debrief, HUD bindings, focus manager, colour tokens, text rules | Every screen is reachable and usable from the keyboard |
-| **P6 Audio** | Buses, limiter, mute, volume, first-gesture context, procedural SFX parity | Full mix audible; volume and mute persist |
-| **P7 Quality gate and cutover** | Benchmark on reference hardware, browser matrix, accessibility pass, bundle budget, PR `rebuild` → `main` | Production serves the new build; legacy stays at `/legacy/` |
-| **P8 Backend** | Vercel Functions, Postgres, anonymous IDs, match token, leaderboard, offline queue | Leaderboards work; game still fully playable offline |
+| Phase                           | Deliverable                                                                                                                      | Playable build means                                                  |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| **P0 Foundation**               | Toolchain, CI, Vitest and Playwright harness, legacy preserved at `/legacy/`, parity table skeleton, preview deploy              | App boots to a menu with WebGL2 check and the legacy game reachable   |
+| **P1 Simulation core**          | Fixed step, seeded RNG, movement, collision, ballistics, weapons, bindings, persistence, input, minimal renderer                 | Move, slide, jump, vault, and shoot dummy targets on a boxed Compound |
+| **P2 Rendering and maps**       | Both maps as data, map builder, post-processing, grass, lamps, rain, debris, viewmodel springs, quality tiers and auto-downgrade | Both maps render with the current look at High and Low                |
+| **P3 AI, squad, waves**         | Hostile state machines, perception, cover, flank, sniper band, grenadiers, operators and orders, revives, waves                  | Full hostile waves fight back; operators take and hold zones          |
+| **P4 Match rules**              | Objectives, capture and decay, tickets, win/lose, killstreaks, gadgets, breach charges, scoring, match state machine             | A full match can be won and lost                                      |
+| **P5 Shell and HUD**            | Menus, brief, loadout, settings, pause, debrief, HUD bindings, focus manager, colour tokens, text rules                          | Every screen is reachable and usable from the keyboard                |
+| **P6 Audio**                    | Buses, limiter, mute, volume, first-gesture context, procedural SFX parity                                                       | Full mix audible; volume and mute persist                             |
+| **P7 Quality gate and cutover** | Benchmark on reference hardware, browser matrix, accessibility pass, bundle budget, PR `rebuild` → `main`                        | Production serves the new build; legacy stays at `/legacy/`           |
+| **P8 Backend**                  | Vercel Functions, Postgres, anonymous IDs, match token, leaderboard, offline queue                                               | Leaderboards work; game still fully playable offline                  |
 
 **Why this order:** the simulation comes first so every later system has tests to run against. Rendering follows, so each phase has something to look at. AI needs weapons and ballistics. Rules need AI. Shell and HUD need the state they show. Audio is independent but needs the match events. The cutover waits until parity is proven. The backend is last because it adds risk and no gameplay requirement.
 
