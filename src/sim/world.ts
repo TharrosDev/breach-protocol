@@ -163,7 +163,8 @@ export type WeaponSlot = 0 | 1;
 
 // Events for the render side and the HUD. Positions are world units.
 export type SimEvent =
-  | { type: 'playerFire' }
+  // weapon is the weapon id; suppressed is true when the weapon in hand has a suppressor (legacy w.noisy false).
+  | { type: 'playerFire'; weapon: string; suppressed: boolean }
   | {
       type: 'bullet';
       from: Vec3;
@@ -188,6 +189,8 @@ export type SimEvent =
   | { type: 'wave'; wave: number; spawned: number }
   | { type: 'grenadeThrown'; from: Vec3; to: Vec2 }
   | { type: 'grenadeBlast'; at: Vec3; radius: number }
+  // A flashbang or smoke grenade went off (frag blasts use grenadeBlast). Added for the audio side.
+  | { type: 'grenadeDetonated'; kind: 'flash' | 'smoke'; at: Vec3 }
   | { type: 'orderChanged'; order: 0 | 1 | 2 }
   | { type: 'zoneCaptured'; name: string; playerBonus: boolean }
   | { type: 'killstreakEarned'; id: KillstreakId }
@@ -197,6 +200,8 @@ export type SimEvent =
   | { type: 'airstrikeBlast'; at: Vec3; radius: number }
   | { type: 'breachBlast'; at: Vec3; radius: number; box: BoxId }
   | { type: 'resupplied' }
+  // A medkit was used and restored `healed` hp. Added for the audio side.
+  | { type: 'medkitUsed'; healed: number }
   | { type: 'playerFlashed'; seconds: number }
   | { type: 'matchEnd'; result: MatchResult };
 
@@ -559,7 +564,7 @@ export class SimWorld {
     const steady = this.opts.perk === 'steady' ? 0.7 : 1;
     const adsMul = p.adsT > 0.5 ? 0.55 : 1;
     this.playerShots += 1;
-    events.push({ type: 'playerFire' });
+    events.push({ type: 'playerFire', weapon: def.id, suppressed: !this.weapon.noisy });
 
     p.pitch = clamp(p.pitch + def.recoil * adsMul * shot.recoilMul, -PITCH_LIMIT, PITCH_LIMIT);
     p.yaw += (this.rng.next() * 2 - 1) * def.recoilYaw * steady;
@@ -799,6 +804,7 @@ export class SimWorld {
   // Applies one explosion: the player's damage and flash, the kills it made, and the events for the render side.
   private onGrenadeEvent(ev: GrenadeEvent, events: SimEvent[]): void {
     if (ev.kind === 'frag') events.push({ type: 'grenadeBlast', at: ev.pos, radius: FRAG_RADIUS });
+    else events.push({ type: 'grenadeDetonated', kind: ev.kind, at: ev.pos });
     if (ev.playerFlashT > 0) {
       this.flashT = Math.max(this.flashT, ev.playerFlashT);
       events.push({ type: 'playerFlashed', seconds: ev.playerFlashT });
@@ -855,8 +861,8 @@ export class SimWorld {
   private handlePresses(pressed: ReadonlySet<Action>, events: SimEvent[]): void {
     if (pressed.has('weapon1')) this.requestSwitch(0);
     if (pressed.has('weapon2')) this.requestSwitch(1);
-    if (pressed.has('gadget1')) this.useGadgetSlot(0);
-    if (pressed.has('gadget2')) this.useGadgetSlot(1);
+    if (pressed.has('gadget1')) this.useGadgetSlot(0, events);
+    if (pressed.has('gadget2')) this.useGadgetSlot(1, events);
     if (pressed.has('interact')) this.interact(events);
     if (pressed.has('killstreak')) this.useKillstreak(events);
   }
@@ -871,11 +877,12 @@ export class SimWorld {
   }
 
   // Uses a loadout gadget (gadgets.ts useGadget). Grenades join the flight list, the drone is stored until it ends.
-  private useGadgetSlot(index: 0 | 1): void {
+  private useGadgetSlot(index: 0 | 1, events: SimEvent[]): void {
     const r = useGadget(this.gadgets, index, this.player, this.eye(), this.aimDir(), this.drone);
     if (!r.used) return;
     if (r.kind === 'grenade') this.grenades.push(r.grenade);
     else if (r.kind === 'drone') this.drone = r.drone;
+    else events.push({ type: 'medkitUsed', healed: r.healed });
   }
 
   // Interact (legacy tryInteract, index.html:3236-3241): a resupply crate in reach takes priority, otherwise a

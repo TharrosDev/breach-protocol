@@ -27,6 +27,8 @@ export interface Settings {
   fov: number;
   invertY: boolean;
   volume: number;
+  // Mute silences the master bus without changing the stored volume (spec §1.6).
+  muted: boolean;
   quality: Quality;
   showFps: boolean;
   shake: boolean;
@@ -40,6 +42,7 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = {
   fov: 75,
   invertY: false,
   volume: 0.8,
+  muted: false,
   quality: 'high',
   showFps: false,
   shake: true,
@@ -157,6 +160,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     fov: validateFov(r.fov) ?? DEFAULT_SETTINGS.fov,
     invertY: validateBoolean(r.invertY) ?? DEFAULT_SETTINGS.invertY,
     volume: validateVolume(r.volume) ?? DEFAULT_SETTINGS.volume,
+    muted: validateBoolean(r.muted) ?? DEFAULT_SETTINGS.muted,
     quality: validateQuality(r.quality) ?? DEFAULT_SETTINGS.quality,
     showFps: validateBoolean(r.showFps) ?? DEFAULT_SETTINGS.showFps,
     shake: validateBoolean(r.shake) ?? DEFAULT_SETTINGS.shake,
