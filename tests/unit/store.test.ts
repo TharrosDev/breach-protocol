@@ -143,9 +143,11 @@ describe('settings', () => {
       shake: false,
       colorblind: true,
     };
-    expect(loadSettings(memoryStorage({ bp_settings: JSON.stringify(legacyChanged) }))).toEqual(
-      legacyChanged,
-    );
+    // A value saved before the mute setting existed loads with muted off.
+    expect(loadSettings(memoryStorage({ bp_settings: JSON.stringify(legacyChanged) }))).toEqual({
+      ...legacyChanged,
+      muted: false,
+    });
   });
 });
 

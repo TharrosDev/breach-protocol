@@ -21,6 +21,7 @@ import {
 } from '../ui/screens';
 import type { FocusLike } from '../ui/screens/model';
 import { startGame, type GameHandle, type LiveSettings } from './game';
+import { AppSound } from './sound';
 
 // A screen is built before its element exists, so its focus scope is bound right after the factory returns. Until
 // then the screen gets a stand-in. Escape is handled by each screen (screens/index.ts), so the scope's handler is a
@@ -67,6 +68,8 @@ export function mountShell(root: HTMLElement): void {
 
   let live = liveFrom(loadSettings(), new Bindings(loadBindings()));
   applyColour(doc, live.settings);
+  // One sound per page. Its graph is made on the first gesture (see onFirstGesture below).
+  const sound = new AppSound(live.settings);
   let game: GameHandle | null = null;
   let settingsOpenedFrom: 'menu' | 'pause' = 'menu';
 
@@ -130,6 +133,8 @@ export function mountShell(root: HTMLElement): void {
       onChange: (next: SettingsChange) => {
         live = liveFrom(next.settings, new Bindings(next.bindings));
         applyColour(doc, live.settings);
+        // Volume and mute take effect at once, on the master bus.
+        sound.setLevels(live.settings);
       },
       focus,
     }),
@@ -219,6 +224,7 @@ export function mountShell(root: HTMLElement): void {
       loadout: loadLoadout(),
       live: () => live,
       patchSettings,
+      sound,
       onPause: () => {
         openPause();
       },
@@ -234,6 +240,14 @@ export function mountShell(root: HTMLElement): void {
     game = null;
     openMenu();
   }
+
+  // A click or key press on the page makes the audio graph (the first call only), and resumes it while it is not
+  // running. The menu is the first screen, so in practice that is a menu or brief gesture.
+  const onGesture = (): void => {
+    sound.unlock();
+  };
+  root.addEventListener('pointerdown', onGesture, true);
+  root.addEventListener('keydown', onGesture, true);
 
   openMenu();
 }

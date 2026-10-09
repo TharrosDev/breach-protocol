@@ -235,6 +235,10 @@ export function createSettingsScreen(opts: SettingsOptions): SettingsScreen {
     apply({ volume: Number(volume.input.value) });
     volume.output.textContent = formatPercent(settings.volume);
   });
+  const mute = checkRow('Mute all sound');
+  mute.input.addEventListener('change', () => {
+    apply({ muted: mute.input.checked });
+  });
 
   const panes = new Map<TabId, HTMLElement>();
   const makePane = (id: TabId, label: string, children: HTMLElement[]): HTMLElement => {
@@ -263,7 +267,7 @@ export function createSettingsScreen(opts: SettingsOptions): SettingsScreen {
       shake.row,
       colourblind.row,
     ]),
-    makePane('audio', 'Audio', [sectionLabel('Sound'), volume.row]),
+    makePane('audio', 'Audio', [sectionLabel('Sound'), volume.row, mute.row]),
   );
 
   const root = screenRoot('settings', nav, content);
@@ -309,6 +313,7 @@ export function createSettingsScreen(opts: SettingsOptions): SettingsScreen {
     colourblind.input.checked = settings.colorblind;
     volume.input.value = String(settings.volume);
     volume.output.textContent = formatPercent(settings.volume);
+    mute.input.checked = settings.muted;
     renderCalc();
   }
 

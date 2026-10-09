@@ -37,6 +37,20 @@
  * (aa) The map layout is still seeded from Math.random, as in legacy (index.html:439). It is in the app layer, not in
  *     sim/ or content/. Left for review, because the seeded layout would change what the players see today.
  *
+ * Phase 6 (audio, spec §1.7):
+ * (ac) Sound. The sim reports events and this file maps them to sounds (app/sound-map.ts), then plays them through
+ *     app/sound.ts. The audio graph is made once per page on the first click or key press (app/shell.ts). With no
+ *     audio the match runs silent. Sim changes for the sounds: playerFire now carries the weapon and whether it is
+ *     suppressed, and two events are new: grenadeDetonated (flash and smoke) and medkitUsed.
+ *     Deviations from legacy, for review:
+ *     - Melee has no sound. The sim has no melee action yet (the Q key is bound and shown in the HUD, but nothing
+ *       happens), so there is no event to map. The 'melee' recipe is in synth.ts for when melee is built.
+ *     - A medkit sounds only when it heals. The sim ignores a medkit at full health (sim/gadgets.ts). Legacy
+ *       useMedkit played the tone on every use.
+ *     - The kill tone is played for kills by operators as well as by the player, as legacy damageEnemy does.
+ *     - The graph is made on the first gesture, so the volume and mute are applied then, not at page load. Before
+ *       any gesture there is no context to set them on.
+ *
  * Phase 4 (match rules):
  * (e) Zone visuals. Built per zone (render/zones.ts). The point light is High quality only, as the plan says; a
  *     downgrade rebuilds the zones without it. Colour-blind palette from the saved setting (legacy zoneColor,
@@ -182,6 +196,8 @@ import type { ColourMode } from '../ui/contracts';
 import type { ScreenPoint, WorldProjector } from '../ui/hud/layout';
 import { readyLabel } from '../sim/killstreaks';
 import { keyLabel } from '../ui/screens/model';
+import type { SoundEvent } from '../audio';
+import { mapSimEventToSound } from './sound-map';
 
 // The live settings and bindings. The shell owns them and passes them in, so a change on the settings screen
 // reaches a running match at the next frame.
@@ -190,12 +206,19 @@ export interface LiveSettings {
   readonly bindings: Bindings;
 }
 
+// The page's sound, as the match uses it. The shell passes its AppSound (app/sound.ts).
+export interface MatchSound {
+  play(ev: SoundEvent): void;
+}
+
 // What a match asks of the shell.
 export interface MatchHooks {
   // The current settings and bindings, read each frame.
   live(): LiveSettings;
   // Saves a settings change made by the match itself (the auto-downgrade).
   patchSettings(patch: Partial<Settings>): void;
+  // Plays the sounds the match's events make.
+  sound: MatchSound;
   // The match paused: the shell shows the pause screen.
   onPause(): void;
   // The match resumed: the shell hides the pause screen.
@@ -779,9 +802,13 @@ function runSession(
     if (p.onScreen) addHitNumber(hudRoot, p.x, p.y, damage, head);
   };
 
-  // Turns the sim's events into effects, feed lines and the match end. The sim has already applied them.
+  // Turns the sim's events into sounds, effects, feed lines and the match end. The sim has already applied them.
   const handleEvents = (events: SimEvents): void => {
-    for (const ev of events) handleEvent(ev);
+    for (const ev of events) {
+      const sound = mapSimEventToSound(ev);
+      if (sound !== null) opts.sound.play(sound);
+      handleEvent(ev);
+    }
   };
 
   const handleEvent = (ev: SimEvent): void => {
