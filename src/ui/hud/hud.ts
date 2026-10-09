@@ -47,6 +47,15 @@ export interface HudOperator {
   readonly z: number;
 }
 
+// One row of the Tab scoreboard (legacy #sbBody, index.html:2885-2894). The text is already formatted.
+export interface ScoreboardRow {
+  readonly name: string;
+  readonly score: string;
+  readonly kills: string;
+  readonly deaths: string;
+  readonly status: string;
+}
+
 export interface HudExtras {
   // AI operators, not counting the player. The first two get squad cards; alive ones are minimap dots.
   readonly operators?: readonly HudOperator[];
@@ -54,6 +63,12 @@ export interface HudExtras {
   readonly spread?: number;
   // Key label shown after the squad order, for example 'V'. Omitted when missing.
   readonly orderKey?: string;
+  // The Tab scoreboard (legacy #sb, index.html:2899-2900). True shows the table. Missing means hidden.
+  readonly scoreboard?: boolean;
+  // The scoreboard rows, the player first and then the operators. Missing means no rows.
+  readonly scoreboardRows?: readonly ScoreboardRow[];
+  // The scoreboard footer line (layout.ts scoreboardFooter). Missing means an empty footer.
+  readonly scoreboardFooter?: string;
 }
 
 export interface HudOptions {
@@ -86,6 +101,9 @@ export interface Hud {
 const TICK_COUNT = 24;
 const TICK_STEP_DEG = 15;
 const SQUAD_CARDS = 2;
+// The scoreboard has the player and one row per squad card (legacy updScoreboard, index.html:2885-2894).
+const SCOREBOARD_ROWS = 1 + SQUAD_CARDS;
+const SCOREBOARD_HEADERS = ['Operator', 'Score', 'K', 'D', 'Status'] as const;
 const ZONE_CARDS = 3;
 const ZONE_MARKS = 3;
 const COMPASS_LABELS: readonly { readonly text: string; readonly angle: number }[] = [
@@ -223,6 +241,21 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
   const ks = make('div', 'hud-ks', br);
   const ksFill = make('i', '', make('div', 'hud-bar hud-ks-bar', br));
 
+  // Tab scoreboard, centred over the play area (legacy #sb). Hidden unless the caller says the key is held.
+  const sb = make('div', 'hud-sb', root);
+  sb.hidden = true;
+  const sbTable = make('table', '', sb);
+  const sbHeadRow = make('tr', '', make('thead', '', sbTable));
+  for (const label of SCOREBOARD_HEADERS) make('th', 'hud-lbl', sbHeadRow).textContent = label;
+  const sbBody = make('tbody', '', sbTable);
+  const sbRows = Array.from({ length: SCOREBOARD_ROWS }, () => {
+    const tr = make('tr', '', sbBody);
+    const cells = SCOREBOARD_HEADERS.map(() => make('td', '', tr));
+    return { tr, cells };
+  });
+  const sbFootCell = make('td', 'hud-sb-foot', make('tr', '', make('tfoot', '', sbTable)));
+  sbFootCell.colSpan = SCOREBOARD_HEADERS.length;
+
   const minimap = createMinimap(mm, options.mapDef);
 
   const timers: ReturnType<typeof setTimeout>[] = [];
@@ -354,6 +387,23 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
     setHidden(kia, main === '');
   }
 
+  function updateScoreboard(extras: HudExtras): void {
+    const open = extras.scoreboard === true;
+    setHidden(sb, !open);
+    if (!open) return;
+    const rows = extras.scoreboardRows ?? [];
+    sbRows.forEach((r, i) => {
+      const row = rows[i];
+      setHidden(r.tr, row === undefined);
+      if (row === undefined) return;
+      const values = [row.name, row.score, row.kills, row.deaths, row.status];
+      r.cells.forEach((cell, j) => {
+        setText(cell, values[j] ?? '');
+      });
+    });
+    setText(sbFootCell, extras.scoreboardFooter ?? '');
+  }
+
   function updateAnnounce(view: HudView, step: number): void {
     const ann = view.announce;
     const key = ann === null ? null : `${ann.text}\n${ann.sub}`;
@@ -441,6 +491,7 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
 
     updateHitMarker(view, step);
     updateKia(view);
+    updateScoreboard(extras);
     setText(prompt, view.prompt);
     updateAnnounce(view, step);
     updateFeed(view);

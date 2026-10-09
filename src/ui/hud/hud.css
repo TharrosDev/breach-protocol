@@ -689,6 +689,42 @@
   background: var(--tok-kill);
 }
 
+/* ---------- Tab scoreboard: centred, shown while the key is held (legacy #sb, index.html:172-176) ---------- */
+
+.hud-sb {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  box-sizing: border-box;
+  width: min(480px, calc(100% - 32px));
+  background: var(--tok-panel);
+  border: 1px solid var(--hud-line);
+  border-radius: 10px;
+  padding: 16px 20px;
+}
+
+.hud-sb table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.hud-sb th {
+  padding: 4px 8px;
+  text-align: left;
+}
+
+.hud-sb td {
+  padding: 6px 8px;
+  border-top: 1px solid var(--hud-line);
+}
+
+.hud-sb-foot {
+  font-size: 13px;
+  color: var(--tok-mute);
+}
+
 /* ---------- 1099 px and below: top bar moves below the top row ---------- */
 
 @media (max-width: 1099px) {

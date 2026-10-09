@@ -29,10 +29,11 @@
  *     hostile. With the Breaker shotgun (nine pellets) hits can outnumber shots, so the accuracy can exceed 100%.
  *     Kept as legacy; left for review.
  * (y) Loadout. The primary weapon and attachment come from the saved loadout (Phase 4 used the VX with Reflex). The ADS
- *     rate is 17 with Reflex and 12 without (spec §1.2). Weapon switching (keys 1 and 2) is not in the sim, so the
- *     sidearm is not reachable. That is a gap from phase 1 and is left for review.
- * (z) Scoreboard. The Tab scoreboard overlay (legacy updScoreboard, index.html:2885) is not ported. The key is
- *     listed in Controls (spec §1.6) and in the intro hint, but it does nothing yet.
+ *     rate is 17 with Reflex and 12 without (spec §1.2). Keys 1 and 2 switch the primary and the sidearm (sim/world.ts
+ *     requestSwitch, legacy switchWeapon). The viewmodel lowers the gun during the 0.35 s switch and shows the gun in
+ *     hand. The sidearm has no attachment, as legacy.
+ * (z) Scoreboard. The Tab scoreboard (legacy updScoreboard, index.html:2885-2900) is a HUD table shown while the key is
+ *     held in play. Rows and footer come from app/hud-view.ts; the table is in ui/hud/hud.ts.
  * (aa) The map layout is still seeded from Math.random, as in legacy (index.html:439). It is in the app layer, not in
  *     sim/ or content/. Left for review, because the seeded layout would change what the players see today.
  *
@@ -462,7 +463,7 @@ function runSession(
   const rainField = new RainField(mapRng.fork('rain'));
   const rain = buildRain(scene, rainField);
 
-  // Weapons and the viewmodel. Both models are built; the primary is shown, and the sidearm is hidden.
+  // Weapons and the viewmodel. Both models are built; the gun in hand is shown (see frame()).
   const gunRoot = new THREE.Group();
   camera.add(gunRoot);
   const primaryModel = buildGunModel(weapon.id);
@@ -557,7 +558,12 @@ function runSession(
   // The HUD. Its view is built each frame from the sim and the messages in hudState.
   const hudState = new HudState();
   const keyOf = (action: Action): string => keyLabel(liveNow.bindings.get(action));
-  const hudEnv: HudEnv = { difficultyTickets: difficulty.tickets, keyOf };
+  const hudEnv: HudEnv = {
+    difficultyTickets: difficulty.tickets,
+    keyOf,
+    mapName: map.name,
+    difficultyName: difficulty.name,
+  };
   const project: WorldProjector = (x, y, z): ScreenPoint => {
     camera.updateMatrixWorld();
     const v = new THREE.Vector3(x, y, z).project(camera);
@@ -1229,11 +1235,17 @@ function runSession(
     rain.setVisible(rainOn);
     if (rainOn) rainField.update(fxDt, P.pos.x, P.pos.z);
 
+    // The gun in hand follows the sim (legacy curW). A new gun clears the kick, as legacy switchWeapon does.
+    const inHand = sim.activeSlot === 0 ? primaryModel : sidearmModel;
+    if (inHand !== shown) {
+      showGun(inHand);
+      vm.gunKick = 0;
+    }
     const pose = gunPose(vm, {
       adsT: P.adsT,
       moving: P.moving,
       bobT,
-      switchT: 0,
+      switchT: sim.switchT,
       reloadProgress: currentReload(),
     });
     shown.group.position.set(pose.position[0], pose.position[1], pose.position[2]);
@@ -1258,7 +1270,9 @@ function runSession(
 
     // The HUD reads the sim after the step and the camera update, so its projections match this frame.
     hudState.advance(fxDt);
-    hud.update(buildHudView(sim, hudEnv, hudState), fxDt, buildHudExtras(sim, hudEnv));
+    // The Tab scoreboard shows while its key is held in play (legacy index.html:2899-2900).
+    const scoreboardHeld = inPlay && keyboard.held().has(liveNow.bindings.get('scoreboard'));
+    hud.update(buildHudView(sim, hudEnv, hudState), fxDt, buildHudExtras(sim, hudEnv, scoreboardHeld));
 
     // A paused or finished match draws its last picture once and then holds it. The pause and debrief screens sit on
     // top of that picture, and software GL is slow enough to starve the page while it draws every frame.

@@ -19,6 +19,7 @@ import {
   markerSize,
   matchFeed,
   scaleX,
+  scoreboardFooter,
   squadFraction,
   ticketFraction,
   tokenVar,
@@ -302,5 +303,31 @@ describe('token mappings', () => {
     expect(HIT_SECONDS.hit).toBeGreaterThan(0);
     expect(HIT_SECONDS.kill).toBeGreaterThan(HIT_SECONDS.hit);
     expect(HIT_SECONDS.head).toBe(HIT_SECONDS.kill);
+  });
+});
+
+describe('scoreboard footer', () => {
+  it('reads as the legacy footer: hostiles, objectives, tickets, then map and difficulty', () => {
+    const text = scoreboardFooter({
+      hostiles: 7,
+      captured: 1,
+      zones: 3,
+      tickets: 180,
+      mapName: 'Compound',
+      difficultyName: 'Veteran',
+    });
+    expect(text).toBe('Hostiles remaining: 7 · Objectives: 1/3 · Enemy tickets: 180 · Compound, Veteran');
+  });
+
+  it('leaves out the map and difficulty when their names are empty', () => {
+    const text = scoreboardFooter({
+      hostiles: 0,
+      captured: 3,
+      zones: 3,
+      tickets: 0,
+      mapName: '',
+      difficultyName: '',
+    });
+    expect(text).toBe('Hostiles remaining: 0 · Objectives: 3/3 · Enemy tickets: 0');
   });
 });

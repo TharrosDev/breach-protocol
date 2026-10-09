@@ -178,3 +178,25 @@ export function matchFeed(prev: readonly FeedKey[], next: readonly FeedKey[]): n
   }
   return out;
 }
+
+export interface ScoreboardFooterInput {
+  readonly hostiles: number;
+  readonly captured: number;
+  readonly zones: number;
+  readonly tickets: number;
+  readonly mapName: string;
+  readonly difficultyName: string;
+}
+
+// The scoreboard footer (legacy updScoreboard, index.html:2855): hostiles, objectives, enemy tickets, then the map and
+// the difficulty. An empty name is left out together with its comma.
+export function scoreboardFooter(input: ScoreboardFooterInput): string {
+  const parts = [
+    `Hostiles remaining: ${String(input.hostiles)}`,
+    `Objectives: ${String(input.captured)}/${String(input.zones)}`,
+    `Enemy tickets: ${String(input.tickets)}`,
+  ];
+  const context = [input.mapName, input.difficultyName].filter((s) => s !== '').join(', ');
+  if (context !== '') parts.push(context);
+  return parts.join(' · ');
+}
