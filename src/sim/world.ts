@@ -715,6 +715,10 @@ export class SimWorld {
       seconds: this.time,
       mapName: this.opts.mapName,
       difficulty: this.opts.difficulty.name,
+      shots: this.playerShots,
+      hits: this.playerHits,
+      streak: this.streak,
+      zones: this.zones.map((z) => ({ name: z.name, captured: z.captured })),
     };
   }
 

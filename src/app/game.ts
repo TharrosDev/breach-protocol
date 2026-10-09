@@ -1,24 +1,57 @@
 /*
- * Phase 4 integration. Deviations from the legacy game (public/index.html) and decisions for review:
+ * Phase 4 and Phase 5 integration. Deviations from the legacy game (public/index.html) and decisions for review:
+ *
+ * Phase 5 (shell, HUD, accessibility):
+ * (p) Screens. The menu, brief, loadout, settings, pause and debrief are the modules in ui/screens. The flow is in
+ *     app/shell.ts. Redeploy starts the match at once, without the brief (legacy redeploy, index.html:3041). Main
+ *     menu leaves the match and shows the menu.
+ * (q) HUD. createHud (ui/hud/hud.ts) reads a view built from the sim each frame (app/hud-view.ts). The sim is never
+ *     written by the HUD. The kill feed replaces the Phase 2-4 toast. Game messages are feed lines, and the legacy
+ *     banners (multi-kill, killstreak, squad order, revive) are announce banners.
+ * (r) Pause. Esc, or losing a pointer lock that was held, pauses the match and shows the pause screen (Resume,
+ *     Settings, Abort to menu). Legacy used a click-to-resume overlay. A pause releases the pointer lock, so the mouse
+ *     reaches the pause screen. A refused pointer lock does not pause the match: a feed line says so instead (spec §4
+ *     asks for a pause on refusal; the existing E2E tests run where the lock is refused and expect play, so this is
+ *     left for review).
+ * (ab) A paused or finished match draws its last frame once and holds it (the pause and debrief screens sit on top).
+ *     Software GL is slow enough to starve the page while it draws every frame. Legacy redrew every frame.
+ * (s) Settings apply live: sensitivity, ADS multiplier, invert Y, FOV, the colour-blind palette (zones, HUD, markers),
+ *     the FPS counter and screen shake. Graphics quality applies live too, through applyQuality, which rebuilds what
+ *     the quality tier changes (post chain, zone light, grass, shadows).
+ * (t) Screen shake. The camera moves by up to 0.06 m times the shake value, which is raised to 0.15 on each hit taken
+ *     (legacy P.shake, index.html:1625 and 1776-1777) and decays at 2 per second.
+ * (u) Feed messages for graphics downgrade, a refused pointer lock and a lost WebGL context (legacy toasts were not
+ *     kept; spec §1.6 asks for the feed).
+ * (v) Hit markers and hit numbers are shown for player hits only (legacy hitNumber in the player's bullet code,
+ *     index.html:1878). Damage indicators point at the source of each hit taken (legacy addDmgIndicator).
+ * (w) The HUD operator count includes the player, as the legacy line does (index.html:2888: "OPERATORS n/3").
+ * (x) Accuracy in the debrief uses the legacy counts: one shot per trigger pull and one hit per bullet that hits a
+ *     hostile. With the Breaker shotgun (nine pellets) hits can outnumber shots, so the accuracy can exceed 100%.
+ *     Kept as legacy; left for review.
+ * (y) Loadout. The primary weapon and attachment come from the saved loadout (Phase 4 used the VX with Reflex). The ADS
+ *     rate is 17 with Reflex and 12 without (spec §1.2). Weapon switching (keys 1 and 2) is not in the sim, so the
+ *     sidearm is not reachable. That is a gap from phase 1 and is left for review.
+ * (z) Scoreboard. The Tab scoreboard overlay (legacy updScoreboard, index.html:2885) is not ported. The key is
+ *     listed in Controls (spec §1.6) and in the intro hint, but it does nothing yet.
+ * (aa) The map layout is still seeded from Math.random, as in legacy (index.html:439). It is in the app layer, not in
+ *     sim/ or content/. Left for review, because the seeded layout would change what the players see today.
  *
  * Phase 4 (match rules):
  * (e) Zone visuals. Built per zone (render/zones.ts). The point light is High quality only, as the plan says; a
  *     downgrade rebuilds the zones without it. Colour-blind palette from the saved setting (legacy zoneColor,
  *     index.html:1026), read each frame.
- * (f) Debrief. The end screen is minimal: result heading, the formatScoreLine sentence, Redeploy and Main menu.
- *     Legacy's debrief tiles (index.html:396-412, 2641-2658) are Phase 5. The heading uses 'Mission Failed' from
- *     index.html:2648 (the Phase 3 toast said 'Mission failed').
+ * (f) Debrief. The debrief screen shows the legacy tiles (index.html:396-412, 2641-2658) from the match result.
+ *     The heading uses 'Mission Failed' from index.html:2648 (the Phase 3 toast said 'Mission failed').
  * (g) Match end. The match stops on the result and waits for the player. Phase 3 restarted it after 4 s. Legacy
  *     never restarts on its own (it shows the debrief).
  * (h) Redeploy. Builds a new session: new map layout, fresh state and a fresh renderer. Legacy's redeploy rebuilt
  *     the map too (index.html:2687-2690, 3041).
- * (i) Killstreak feedback. Legacy shows announce banners and feed lines. Phase 4 shows toasts with the same wording
- *     (index.html:2019-2050). The UAV and sentry timers have no HUD yet (Phase 5).
+ * (i) Killstreak feedback. Legacy shows announce banners and feed lines (index.html:2019-2050). The UAV and sentry
+ *     timers are shown through the HUD (Phase 5).
  * (j) Crates. A used resupply crate hides for its 30 s cooldown (legacy k.mesh.visible, index.html:3230).
  * (k) Breach. A broken wall's mesh is removed. The collider and the nav grid are updated by the sim.
- * (l) Spotted hostiles are revealed to the sim (UAV and drone spot values). Nothing is drawn for them yet, as the
- *     plan says for this phase.
- * (m) Flashbang. The player's blindness is stored in the sim (flashT). The white overlay is Phase 5.
+ * (l) Spotted hostiles are revealed to the sim (UAV and drone spot values). The HUD draws the spotted boxes.
+ * (m) Flashbang. The player's blindness is stored in the sim (flashT). The HUD whiteout is flashT / 3 (legacy).
  * (n) Groundaim. The sentry and airstrike aim use legacy groundAim (index.html:1303-1310). For a level aim it is
  *     8 m ahead whatever the distance, so the 6, 4 and 2 m sentry fallbacks only apply to downward aims. Kept as
  *     legacy.
@@ -47,27 +80,26 @@
  * - Reload (R) runs on the sim step, as legacy does.
  * - Enemy frag grenades are simulated in sim/world.ts (index.html:1938-1981), and so are the player's gadgets.
  * - Match end: sim/tickets.ts decides win (enemy tickets 0, or every zone captured) and loss (dead with no
- *   reinforcements left, index.html:2958, 1648). The end is shown on the end screen, see (f) and (g).
+ *   reinforcements left, index.html:2958, 1648). The end is shown on the debrief, see (f) and (g).
  */
 import * as THREE from 'three';
 import { FixedStep } from '../core/clock';
 import { createRng } from '../core/rng';
 import type { Vec3 } from '../core/math';
-import { SIDEARM_ID } from '../content/ids';
+import { SIDEARM_ID, type Action } from '../content/ids';
 import { getMap } from '../content/maps';
+import type { MapDef } from '../content/maps/types';
 import { buildMap, buildingRects, type Footprint, type MapHandle } from '../render/map-builder';
 import { WEAPONS } from '../content/weapons';
 import { YAW_PER_PX, ZONE_TICKET_COST } from '../content/tuning';
-import type { KillstreakId } from '../content/killstreaks';
 import { ENEMY_DEFS } from '../content/enemies';
 import { DIFF } from '../content/difficulty';
-import { Bindings } from '../input/bindings';
+import type { Bindings } from '../input/bindings';
 import { buildCommand } from '../input/commands';
 import { KeyboardInput } from '../input/keyboard';
 import { MouseInput } from '../input/mouse';
 import { PointerLock } from '../input/pointer-lock';
-import { loadBindings, loadLoadout, loadSettings, saveSettings } from '../persist/store';
-import type { Quality } from '../persist/schema';
+import type { Loadout, Quality, Settings } from '../persist/schema';
 import { applyEnvironment, createPostChain, type PostChain } from '../render/post';
 import { profileFor, type QualityProfile } from '../render/quality';
 import { buildGrass } from '../render/grass';
@@ -118,14 +150,21 @@ import { turretModel, type TurretModel } from '../render/turret-model';
 import { CollisionWorld } from '../sim/collision';
 import type { Enemy } from '../sim/entities';
 import type { Grenade, SmokeCloud } from '../sim/grenades';
-import { readyLabel } from '../sim/killstreaks';
 import type { MatchResult } from '../sim/match';
 import type { Turret } from '../sim/turret';
 import type { WeaponState } from '../sim/weapons';
 import { SimWorld, type SimEvent, type SimEvents } from '../sim/world';
 import { installDebugHook, type GameState } from './debug-hook';
-import { buildEndScreen } from './end-screen';
 import { DEFAULT_GOVERNOR_OPTIONS, FpsGovernor } from './governor';
+import {
+  HudState,
+  KILLSTREAK_USED,
+  SQUAD_ORDER_NAMES,
+  buildHudExtras,
+  buildHudView,
+  introKeys,
+  type HudEnv,
+} from './hud-view';
 import {
   MUZZLE_TIME,
   TRACER_START,
@@ -136,9 +175,43 @@ import {
   reloadTotal,
   viewmodelVisible,
 } from './wiring';
+import { createHud, type Hud } from '../ui/hud/hud';
+import { addDamageIndicator, addHitNumber } from '../ui/hud/effects';
+import type { ColourMode } from '../ui/contracts';
+import type { ScreenPoint, WorldProjector } from '../ui/hud/layout';
+import { readyLabel } from '../sim/killstreaks';
+import { keyLabel } from '../ui/screens/model';
+
+// The live settings and bindings. The shell owns them and passes them in, so a change on the settings screen
+// reaches a running match at the next frame.
+export interface LiveSettings {
+  readonly settings: Settings;
+  readonly bindings: Bindings;
+}
+
+// What a match asks of the shell.
+export interface MatchHooks {
+  // The current settings and bindings, read each frame.
+  live(): LiveSettings;
+  // Saves a settings change made by the match itself (the auto-downgrade).
+  patchSettings(patch: Partial<Settings>): void;
+  // The match paused: the shell shows the pause screen.
+  onPause(): void;
+  // The match resumed: the shell hides the pause screen.
+  onResume(): void;
+  // The match ended: the shell shows the debrief. The match stops until the shell disposes it.
+  onOver(result: MatchResult): void;
+}
+
+export interface MatchOptions extends MatchHooks {
+  readonly debug: boolean;
+  readonly loadout: Loadout;
+}
 
 export interface GameHandle {
   state(): GameState;
+  // Resume from the pause screen. Asks for the pointer lock too, because the click is a user gesture.
+  resume(): void;
   dispose(): void;
 }
 
@@ -149,20 +222,12 @@ const SPAWN_YAW = Math.PI;
 const PITCH_LIMIT = 1.45;
 // Legacy OPERATOR_COLOR (index.html:531).
 const OPERATOR_COLOUR = 0x2f6b8a;
-// Legacy ORDERS (index.html:473).
-const ORDER_NAMES = ['ATTACK', 'HOLD', 'FOLLOW'] as const;
-// Feed line when a killstreak is used (legacy useKillstreak, index.html:2027-2047).
-const KILLSTREAK_USED_MESSAGE: Readonly<Record<KillstreakId, string>> = {
-  uav: 'UAV online: hostiles revealed',
-  sentry: 'Sentry turret online',
-  airstrike: 'Airstrike inbound',
-};
 // Legacy trackFps samples every 0.5 s (index.html:2962). The governor takes the same window.
 const FPS_WINDOW = DEFAULT_GOVERNOR_OPTIONS.sampleSeconds;
 const FPS_STALL_S = 1;
 const DOWNGRADE_MESSAGE = 'Graphics lowered to keep the framerate up';
 const CONTEXT_LOST_MESSAGE = 'Graphics reset. Restoring…';
-const TOAST_MS = 3000;
+const POINTER_REFUSED_MESSAGE = 'Mouse capture was refused. Click the game to capture the mouse.';
 // Legacy muzzle light (index.html:656, 2918-2924).
 const MUZZLE_COLOR = 0xffb060;
 const MUZZLE_INTENSITY = 3;
@@ -179,10 +244,17 @@ const FRAG_BURST = { n: 60, speed: 8, hex: 0xff5a3a, life: 0.8, up: 0 };
 const RAIN_MAP = 'substation';
 // Hostile body height used for the blood burst (index.html:2525).
 const BLOOD_Y = 1.2;
+// Height of a hit number above the hostile's feet (index.html:3389-3391, 1.6 m).
+const HIT_NUMBER_Y = 1.6;
 // Crouch distance for a hostile hiding in cover (index.html:2338).
 const HIDING_REACH = 0.9;
-// index.html:1728 (ADS blend rate with Reflex). The loadout is fixed to VX with Reflex, as in phase 1.
+// index.html:1728 (ADS blend rate with Reflex). Without Reflex the rate is 12 (spec §1.2).
 const ADS_RATE_REFLEX = 17;
+const ADS_RATE_PLAIN = 12;
+// Screen shake (legacy P.shake, index.html:1776-1777): offset = shake * SHAKE_SCALE metres, decays at SHAKE_DECAY/s.
+const SHAKE_HIT = 0.15;
+const SHAKE_SCALE = 0.06;
+const SHAKE_DECAY = 2;
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v));
@@ -243,9 +315,14 @@ function findSun(scene: THREE.Scene): THREE.DirectionalLight | null {
   return scene.children.find((c): c is THREE.DirectionalLight => c instanceof THREE.DirectionalLight) ?? null;
 }
 
+function paletteOf(settings: Settings): ColourMode {
+  return settings.colorblind ? 'colourblind' : 'normal';
+}
+
 // One match. startGame keeps one of these alive and replaces it after a WebGL context restore.
 interface Session {
   state(): GameState;
+  resume(): void;
   dispose(): void;
 }
 
@@ -259,47 +336,31 @@ interface HumanView {
   phase: number;
 }
 
-// What a session asks of the app shell. Each one ends the session and, except for onMenu, starts a new one.
-interface SessionHooks {
-  // The browser restored the WebGL context: the match is rebuilt (see startGame).
-  onContextRestored: () => void;
-  // The player chose Redeploy on the end screen: a new match on a new map layout.
-  onRedeploy: () => void;
-  // The player chose Main menu on the end screen: the session ends and the shell shows the menu.
-  onMenu: () => void;
-}
-
-// Starts the match loop inside root. Returns a handle for tests and teardown. onMenu is called after the
-// session is torn down, when the player leaves the match.
-export function startGame(root: HTMLElement, opts: { debug: boolean; onMenu?: () => void }): GameHandle {
+// Starts the match loop inside stage. Returns a handle for the shell. The stage element is owned by the match while
+// it runs: the canvas and the HUD are added to it and removed on dispose.
+export function startGame(stage: HTMLElement, opts: MatchOptions): GameHandle {
   let session: Session | null = null;
   let closed = false;
 
+  // Restore strategy: when the browser restores the WebGL context, the old renderer and every GPU
+  // resource are dead. The match is rebuilt in the same stage (dispose, then start again). The rebuilt
+  // match starts in play, and the score and the player position reset.
   const restart = (): void => {
     session?.dispose();
     session = null;
     if (!closed) launch();
   };
 
-  // Restore strategy: when the browser restores the WebGL context, the old renderer and every GPU
-  // resource are dead. The match is rebuilt in the same root (dispose, then start again). The rebuilt
-  // match starts in play, and the score and the player position reset.
   const launch = (): void => {
-    session = runSession(root, opts, {
-      onContextRestored: restart,
-      onRedeploy: restart,
-      onMenu: () => {
-        closed = true;
-        session?.dispose();
-        session = null;
-        opts.onMenu?.();
-      },
-    });
+    session = runSession(stage, opts, { onContextRestored: restart });
   };
   launch();
 
   return {
     state: () => session?.state() ?? 'play',
+    resume: () => {
+      session?.resume();
+    },
     dispose: () => {
       closed = true;
       session?.dispose();
@@ -308,34 +369,32 @@ export function startGame(root: HTMLElement, opts: { debug: boolean; onMenu?: ()
   };
 }
 
-function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionHooks): Session {
-  const settings = loadSettings();
-  const bindings = new Bindings(loadBindings());
-  const loadout = loadLoadout();
-  const map = getMap(loadout.map);
+function runSession(
+  stage: HTMLElement,
+  opts: MatchOptions,
+  hooks: { onContextRestored: () => void },
+): Session {
+  const doc = stage.ownerDocument;
+  const initial = opts.live();
+  const loadout = opts.loadout;
+  const map: MapDef = getMap(loadout.map);
+  const difficulty = DIFF[loadout.difficulty];
 
-  root.replaceChildren();
-  const canvas = document.createElement('canvas');
+  stage.replaceChildren();
+  const canvas = doc.createElement('canvas');
   canvas.className = 'play-canvas';
-  const overlay = document.createElement('button');
-  overlay.type = 'button';
-  overlay.className = 'pause-overlay';
-  overlay.textContent = 'Click to resume';
-  overlay.hidden = true;
-  const toast = document.createElement('div');
-  toast.className = 'toast';
-  toast.setAttribute('role', 'status');
-  toast.hidden = true;
-  root.append(canvas, overlay, toast);
+  const hudRoot = doc.createElement('div');
+  stage.append(canvas, hudRoot);
 
-  let quality: Quality = settings.quality;
+  let liveNow: LiveSettings = initial;
+  let quality: Quality = initial.settings.quality;
   let profile: QualityProfile = profileFor(quality, window.devicePixelRatio);
 
   const renderer = createRenderer(canvas);
   renderer.setPixelRatio(profile.pixelRatioCap);
   renderer.shadowMap.enabled = profile.shadows;
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(settings.fov, 1, 0.05, 400);
+  const camera = new THREE.PerspectiveCamera(initial.settings.fov, 1, 0.05, 400);
   // The viewmodel is a child of the camera, so the camera has to be part of the scene graph.
   scene.add(camera);
 
@@ -355,7 +414,7 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
   let grass = buildGrass(scene, mapRng.fork('grass'), profile.grassCount, world, zones);
 
   // The sim is built after the lamps, so its navigation grid sees every collider.
-  const difficulty = DIFF[loadout.difficulty];
+  const weapon = WEAPONS[loadout.primary];
   const sim = new SimWorld({
     collision: world,
     zones,
@@ -363,10 +422,10 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
     buildings: buildingRects(map),
     rng: mapRng.fork('sim'),
     difficulty,
-    weapon: WEAPONS.vx,
-    attachment: 'reflex',
+    weapon,
+    attachment: loadout.attachment,
     perk: loadout.perk,
-    adsRate: ADS_RATE_REFLEX,
+    adsRate: loadout.attachment === 'reflex' ? ADS_RATE_REFLEX : ADS_RATE_PLAIN,
     playerSpawn: SPAWN,
     playerYaw: SPAWN_YAW,
     gadgets: loadout.gadgets,
@@ -406,7 +465,7 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
   // Weapons and the viewmodel. Both models are built; the primary is shown, and the sidearm is hidden.
   const gunRoot = new THREE.Group();
   camera.add(gunRoot);
-  const primaryModel = buildGunModel(WEAPONS.vx.id);
+  const primaryModel = buildGunModel(weapon.id);
   const sidearmModel = buildGunModel(SIDEARM_ID);
   gunRoot.add(primaryModel.group, sidearmModel.group);
   const muzzle = new THREE.PointLight(MUZZLE_COLOR, 0, MUZZLE_DISTANCE, MUZZLE_DECAY);
@@ -480,11 +539,12 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
   let disposed = false;
   let muzzleT = 0;
   let bobT = 0;
+  let shake = 0;
   let fpsFrames = 0;
   let fpsTime = 0;
-  let toastTimer: number | null = null;
-  // The debrief shown when the match ends. Null while the match runs.
-  let endScreen: HTMLElement | null = null;
+  let hudMode: ColourMode = paletteOf(initial.settings);
+  // True when the last draw was a held frame of a paused or finished match (see the end of frame()).
+  let heldFrame = false;
 
   const keyboard = new KeyboardInput(() => state === 'play');
   keyboard.attach(window);
@@ -494,21 +554,45 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
   lock.attach();
   let wasLocked = false;
 
+  // The HUD. Its view is built each frame from the sim and the messages in hudState.
+  const hudState = new HudState();
+  const keyOf = (action: Action): string => keyLabel(liveNow.bindings.get(action));
+  const hudEnv: HudEnv = { difficultyTickets: difficulty.tickets, keyOf };
+  const project: WorldProjector = (x, y, z): ScreenPoint => {
+    camera.updateMatrixWorld();
+    const v = new THREE.Vector3(x, y, z).project(camera);
+    return {
+      x: ((v.x + 1) / 2) * viewW,
+      y: ((1 - v.y) / 2) * viewH,
+      onScreen: v.z < 1 && Math.abs(v.x) < 1.05 && Math.abs(v.y) < 1.05,
+    };
+  };
+  const hud: Hud = createHud(hudRoot, { mapDef: map, project });
+  hud.setColourMode(hudMode);
+  const fpsEl = doc.createElement('div');
+  fpsEl.className = 'hud-fps';
+  fpsEl.hidden = !initial.settings.showFps;
+  hudRoot.append(fpsEl);
+  hud.showIntroHints(introKeys(hudEnv));
+
   const pause = (): void => {
     if (state !== 'play') return;
     state = 'paused';
     keyboard.clear();
     mouse.clear();
     fireClick = false;
-    overlay.hidden = false;
+    // A held pointer lock keeps the mouse on the canvas, out of reach of the pause screen. Escape releases it in a
+    // real browser; this releases it for every other way of pausing (headless Chromium does not release it on Escape).
+    if (doc.pointerLockElement !== null) doc.exitPointerLock();
+    opts.onPause();
   };
 
   // Only a paused match resumes. A finished match stays on its debrief, even if the pointer locks again.
   const resume = (): void => {
-    if (state !== 'paused') return;
+    if (state !== 'paused' || contextLoss.lost) return;
     state = 'play';
-    overlay.hidden = true;
     last = null;
+    opts.onResume();
   };
 
   const unsubscribeLock = lock.onChange((locked) => {
@@ -521,22 +605,16 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
     if (wasLocked) pause();
   });
 
-  const showToast = (message: string): void => {
-    toast.textContent = message;
-    toast.hidden = false;
-    if (toastTimer !== null) window.clearTimeout(toastTimer);
-    toastTimer = window.setTimeout(() => {
-      toast.hidden = true;
-      toastTimer = null;
-    }, TOAST_MS);
-  };
+  // Asked on the Launch click, so the browser treats it as a user gesture. A refusal is explained in the feed.
+  void lock.request().then((locked) => {
+    if (!locked && !disposed) hudState.feed(POINTER_REFUSED_MESSAGE, 'warn');
+  });
 
-  // A lost context pauses play and shows the notice. The overlay cannot resume play until the context is back.
+  // A lost context pauses play and shows the notice. The resume is refused until the context is back.
   const contextLoss = createContextLossHandler({
     onLost: () => {
       pause();
-      overlay.textContent = CONTEXT_LOST_MESSAGE;
-      overlay.hidden = false;
+      hudState.feed(CONTEXT_LOST_MESSAGE, 'warn');
     },
     onRestored: () => {
       hooks.onContextRestored();
@@ -544,17 +622,19 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
   });
   contextLoss.attach(canvas);
 
-  const onOverlayClick = (): void => {
-    if (contextLoss.lost) return;
-    void lock.request();
-    resume();
-  };
-  overlay.addEventListener('click', onOverlayClick);
-
   const onCanvasMouseDown = (event: MouseEvent): void => {
-    if (state === 'play' && event.button === 0) fireClick = true;
+    if (state !== 'play' || event.button !== 0) return;
+    fireClick = true;
+    // A click in play captures the mouse when it is not captured yet.
+    if (doc.pointerLockElement !== canvas) void lock.request();
   };
   canvas.addEventListener('mousedown', onCanvasMouseDown);
+
+  // Escape pauses play. Chrome also leaves the pointer lock on Escape, which pauses through the lock change.
+  const onEscapeKey = (event: KeyboardEvent): void => {
+    if (event.code === 'Escape') pause();
+  };
+  window.addEventListener('keydown', onEscapeKey);
 
   const onVisibility = (): void => {
     if (document.hidden) {
@@ -601,9 +681,9 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
       return;
     }
     const chain = await createPostChain(renderer, scene, camera);
-    if (isGone() || !postWanted() || chain === null) {
+    if (isGone() || !postWanted() || chain === null || post !== null) {
       chain?.dispose();
-      if (!isGone()) setHemi(false);
+      if (!isGone()) setHemi(post !== null);
       return;
     }
     post = chain;
@@ -617,42 +697,52 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
     }
     setHemi(true);
   };
-  void initPost().catch((err: unknown) => {
-    console.warn('Post setup failed; running without post.', err);
-    setHemi(false);
-  });
+  const startPost = (): void => {
+    void initPost().catch((err: unknown) => {
+      console.warn('Post setup failed; running without post.', err);
+      setHemi(false);
+    });
+  };
+  startPost();
 
-  // Auto-downgrade (legacy trackFps, index.html:2962-2977). Settings are saved, then the Low profile is applied.
-  const downgrade = (): void => {
-    if (disposed) return;
-    quality = 'low';
-    saveSettings({ ...loadSettings(), quality: 'low' });
-    profile = profileFor('low', window.devicePixelRatio);
-    if (post !== null) {
-      post.dispose();
+  // Applies a graphics quality: the same work for a downgrade, an upgrade, or a change on the settings screen.
+  const applyQuality = (next: Quality): void => {
+    if (disposed || next === quality) return;
+    quality = next;
+    profile = profileFor(next, window.devicePixelRatio);
+    if (!profile.post) {
+      post?.dispose();
       post = null;
+      scene.environment = null;
     }
-    scene.environment = null;
     renderer.setPixelRatio(profile.pixelRatioCap);
     renderer.shadowMap.enabled = profile.shadows;
     if (sun) sun.castShadow = profile.shadows;
-    setHemi(false);
     muzzle.visible = profile.muzzleLight;
-    buildZones(false);
+    buildZones(next === 'high');
     rebuildGrass(profile.grassCount);
     // Materials recompile for the new shadow setting, as legacy does (index.html:720).
     forEachMaterial(scene, (m) => {
       m.needsUpdate = true;
     });
+    setHemi(post !== null);
+    if (profile.post && post === null) startPost();
     onResize();
-    showToast(DOWNGRADE_MESSAGE);
+  };
+
+  // Auto-downgrade (legacy trackFps, index.html:2962-2977). The setting is saved by the shell, then Low is applied.
+  const downgrade = (): void => {
+    if (disposed) return;
+    opts.patchSettings({ quality: 'low' });
+    applyQuality('low');
+    hudState.feed(DOWNGRADE_MESSAGE, 'warn');
   };
 
   // Legacy mousemove handler (index.html:3012-3016). Applied once per frame, not per fixed step.
-  const applyLook = (dx: number, dy: number): void => {
-    const s = YAW_PER_PX * settings.sens * lerp(1, settings.adsMul, P.adsT);
-    P.yaw -= dx * s;
-    P.pitch = clamp(P.pitch + (settings.invertY ? 1 : -1) * dy * s, -PITCH_LIMIT, PITCH_LIMIT);
+  const applyLook = (dx: number, dy: number, s: Settings): void => {
+    const sc = YAW_PER_PX * s.sens * lerp(1, s.adsMul, P.adsT);
+    P.yaw -= dx * sc;
+    P.pitch = clamp(P.pitch + (s.invertY ? 1 : -1) * dy * sc, -PITCH_LIMIT, PITCH_LIMIT);
   };
 
   const impact = (p: Vec3, dir: Vec3): void => {
@@ -677,7 +767,13 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
     );
   };
 
-  // Turns the sim's events into effects, toasts and the match restart. The sim has already applied them.
+  // A floating damage number above a hostile the player hit (legacy hitNumber, index.html:3389).
+  const hitNumberAt = (e: Enemy, damage: number, head: boolean): void => {
+    const p = project(e.pos.x, HIT_NUMBER_Y, e.pos.z);
+    if (p.onScreen) addHitNumber(hudRoot, p.x, p.y, damage, head);
+  };
+
+  // Turns the sim's events into effects, feed lines and the match end. The sim has already applied them.
   const handleEvents = (events: SimEvents): void => {
     for (const ev of events) handleEvent(ev);
   };
@@ -716,6 +812,26 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
           BLOOD_BURST.up,
           fxRng,
         );
+        if (ev.by === 'player') {
+          hudState.hit('hit');
+          hitNumberAt(ev.enemy, ev.damage, ev.head);
+        }
+        return;
+      }
+      case 'enemyKilled': {
+        const label = ENEMY_DEFS[ev.enemy.kind].label;
+        if (ev.by === 'player') {
+          hudState.playerKill(label, ev.head);
+          hudState.hit(ev.head ? 'head' : 'kill');
+        } else {
+          hudState.feed(`Squad -> ${label}`, 'kill');
+        }
+        return;
+      }
+      case 'playerHit': {
+        // Legacy addDmgIndicator (index.html:1488): the marker points at the source, relative to the view.
+        addDamageIndicator(hudRoot, Math.atan2(ev.from.x - P.pos.x, ev.from.z - P.pos.z) - P.yaw);
+        shake = Math.max(shake, SHAKE_HIT);
         return;
       }
       case 'grenadeBlast': {
@@ -765,35 +881,43 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
       }
       case 'zoneCaptured': {
         // Legacy feed line (index.html:2575).
-        showToast(`${ev.name} secured · -${String(ZONE_TICKET_COST)} enemy tickets`);
+        hudState.feed(`${ev.name} secured · -${String(ZONE_TICKET_COST)} enemy tickets`, 'good');
         return;
       }
       case 'killstreakEarned': {
-        showToast(`Killstreak ready: ${readyLabel(ev.id)} [H]`);
+        // Legacy announce (index.html:2024).
+        const label = readyLabel(ev.id);
+        const key = keyOf('killstreak');
+        hudState.announce(`${label} earned`, `press ${key} to call it in`, 2);
+        hudState.feed(`Killstreak ready: ${label} [${key}]`, 'good');
         return;
       }
       case 'killstreakUsed': {
-        showToast(KILLSTREAK_USED_MESSAGE[ev.id]);
+        const used = KILLSTREAK_USED[ev.id];
+        hudState.feed(used.feed, 'good');
+        hudState.announce(used.banner, used.sub);
         return;
       }
       case 'sentryNoGround': {
-        showToast('No clear ground for a sentry here');
+        hudState.feed('No clear ground for a sentry here', 'warn');
         return;
       }
       case 'resupplied': {
-        showToast('Resupplied');
+        hudState.feed('Resupplied', 'good');
         return;
       }
       case 'playerDown': {
-        showToast('You are down. Squadmate nearby can revive you.');
+        hudState.feed('You are down. Squadmate nearby can revive you.', 'warn');
         return;
       }
       case 'playerEliminated': {
-        showToast('You were eliminated');
+        hudState.feed('You were eliminated', 'death');
         return;
       }
       case 'playerRevived': {
-        showToast(`${ev.by} revived you`);
+        // Legacy banner (index.html:1656).
+        hudState.feed(`${ev.by} revived you`, 'good');
+        hudState.announce('REVIVED', `by ${ev.by}`, 1.4);
         return;
       }
       case 'playerRespawn': {
@@ -804,15 +928,16 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
         return;
       }
       case 'operatorDown': {
-        showToast(`${ev.operator.name} is down`);
+        hudState.feed(`${ev.operator.name} is down`, 'warn');
         return;
       }
       case 'wave': {
-        showToast(`Wave ${String(ev.wave)} inbound`);
+        hudState.feed(`Wave ${String(ev.wave)} inbound`);
         return;
       }
       case 'orderChanged': {
-        showToast(`Squad: ${ORDER_NAMES[ev.order]}`);
+        // Legacy banner (index.html:2993).
+        hudState.announce(`Squad: ${SQUAD_ORDER_NAMES[ev.order]}`, '', 1.2);
         return;
       }
       case 'matchEnd': {
@@ -824,26 +949,22 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
     }
   };
 
-  // The match is over. The sim has stopped, input is released and the debrief takes the screen. Redeploy and
+  // The match is over. The sim has stopped, input is released and the shell shows the debrief. Redeploy and
   // Main menu are the only ways on.
   const finishMatch = (result: MatchResult): void => {
     state = 'over';
     keyboard.clear();
     mouse.clear();
     fireClick = false;
-    overlay.hidden = true;
-    toast.hidden = true;
-    if (document.pointerLockElement !== null) document.exitPointerLock();
-    const debrief = buildEndScreen(result, { onRedeploy: hooks.onRedeploy, onMenu: hooks.onMenu });
-    endScreen = debrief;
-    root.append(debrief);
-    debrief.querySelector<HTMLButtonElement>('button')?.focus();
+    hud.setVisible(false);
+    if (doc.pointerLockElement !== null) doc.exitPointerLock();
+    opts.onOver(result);
   };
 
   const simStep = (first: boolean): void => {
     const pressed: ReadonlySet<string> = first ? pendingPressed : new Set<string>();
     if (first) pendingPressed = new Set<string>();
-    const cmd = buildCommand(keyboard.held(), mouse.buttons(), { dx: 0, dy: 0 }, pressed, bindings);
+    const cmd = buildCommand(keyboard.held(), mouse.buttons(), { dx: 0, dy: 0 }, pressed, liveNow.bindings);
 
     prevX = P.pos.x;
     prevY = P.pos.y;
@@ -952,7 +1073,7 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
   const syncWorld = (fxDt: number): void => {
     sim.zones.forEach((z, i) => {
       const v = zoneViews[i];
-      if (v !== undefined) v.update(z, settings.colorblind);
+      if (v !== undefined) v.update(z, liveNow.settings.colorblind);
     });
     sim.crates.forEach((c, i) => {
       mapH.setCrateVisible(i, c.cd <= 0);
@@ -1037,6 +1158,8 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
     const frameDt = last === null ? 0 : (now - last) / 1000;
     last = now;
     const inPlay = state === 'play';
+    liveNow = opts.live();
+    const s = liveNow.settings;
 
     // FPS sampling over real time, so the 5 s slow window means 5 s on the clock. A frame longer than
     // FPS_STALL_S (a hidden tab or a debugger pause) restarts the window instead of counting as one slow frame.
@@ -1051,20 +1174,35 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
       const fps = fpsFrames / fpsTime;
       fpsFrames = 0;
       fpsTime = 0;
+      fpsEl.textContent = `${String(Math.round(fps))} FPS`;
       if (governor.sample(fps, inPlay, quality) === 'downgrade') downgrade();
+    }
+    if (fpsEl.hidden !== !s.showFps) fpsEl.hidden = !s.showFps;
+
+    // Settings changed on the settings screen take effect now.
+    const mode = paletteOf(s);
+    if (mode !== hudMode) {
+      hudMode = mode;
+      hud.setColourMode(mode);
+    }
+    if (s.quality !== quality) applyQuality(s.quality);
+    if (camera.fov !== s.fov) {
+      camera.fov = s.fov;
+      camera.updateProjectionMatrix();
     }
 
     // Effects and the viewmodel run on the clamped frame time, and stop while paused.
     const fxDt = inPlay ? capDt(frameDt) : 0;
     if (inPlay) {
       const look = mouse.drainLook();
-      applyLook(look.dx, look.dy);
+      applyLook(look.dx, look.dy, s);
       applyViewmodelLook(vm, look.dx, look.dy);
       for (const code of keyboard.drainPressed()) pendingPressed.add(code);
       const steps = step.advance(frameDt);
       for (let i = 0; i < steps; i++) simStep(i === 0);
       bobT += fxDt * bobSpeed(P.sprinting, P.moving);
       muzzleT = Math.max(0, muzzleT - fxDt);
+      shake = Math.max(0, shake - fxDt * SHAKE_DECAY);
       // Spring dt is capped at 0.05 s (see fxDt above).
       stepViewmodel(vm, fxDt, currentReload());
     } else {
@@ -1111,11 +1249,23 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
       lerp(prevY, P.pos.y, a) + P.eyeHeight,
       lerp(prevZ, P.pos.z, a),
     );
+    if (s.shake && shake > 0) {
+      const amp = shake * SHAKE_SCALE;
+      camera.position.x += fxRng.range(-amp, amp);
+      camera.position.y += fxRng.range(-amp, amp);
+    }
     camera.rotation.set(P.pitch, P.yaw + Math.PI, 0, 'YXZ');
 
-    if (!contextLoss.lost) {
+    // The HUD reads the sim after the step and the camera update, so its projections match this frame.
+    hudState.advance(fxDt);
+    hud.update(buildHudView(sim, hudEnv, hudState), fxDt, buildHudExtras(sim, hudEnv));
+
+    // A paused or finished match draws its last picture once and then holds it. The pause and debrief screens sit on
+    // top of that picture, and software GL is slow enough to starve the page while it draws every frame.
+    if (!contextLoss.lost && (inPlay || !heldFrame)) {
       if (post !== null) post.render();
       else renderer.render(scene, camera);
+      heldFrame = !inPlay;
     }
   };
 
@@ -1131,26 +1281,31 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
     });
   }
 
-  // Requested on the Launch click, so the browser treats it as a user gesture. Refusal is not an error.
-  void lock.request();
+  // The render loop starts here. The pointer lock was asked for at the Launch click (above).
   raf = requestAnimationFrame(frame);
 
   return {
     state: () => state,
+    resume: () => {
+      if (state !== 'paused' || contextLoss.lost) return;
+      // The click that resumes is a user gesture, so the pointer lock is asked for here.
+      void lock.request();
+      resume();
+    },
     dispose: () => {
       if (disposed) return;
       disposed = true;
       cancelAnimationFrame(raf);
-      if (toastTimer !== null) window.clearTimeout(toastTimer);
       contextLoss.detach();
       keyboard.detach();
       mouse.detach();
       lock.detach();
       unsubscribeLock();
-      overlay.removeEventListener('click', onOverlayClick);
       canvas.removeEventListener('mousedown', onCanvasMouseDown);
+      window.removeEventListener('keydown', onEscapeKey);
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('resize', onResize);
+      hud.dispose();
       post?.dispose();
       post = null;
       for (const v of zoneViews) v.dispose();
@@ -1163,8 +1318,6 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
       droneView = null;
       breachView?.dispose();
       breachView = null;
-      endScreen?.remove();
-      endScreen = null;
       lamps.dispose();
       mapH.dispose();
       // The remaining meshes and materials are freed by walking the scene. Textures on materials go with them.
@@ -1179,7 +1332,7 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionH
       renderer.dispose();
       // Frees the WebGL context now. Each redeploy makes a new renderer, and browsers cap live contexts.
       renderer.forceContextLoss();
-      root.replaceChildren();
+      stage.replaceChildren();
     },
   };
 }

@@ -34,7 +34,8 @@ test('deploy, move, fire at a dummy', async ({ page }) => {
   const after = await readView(page);
   expect(Math.abs(after.P.pos.z - before.P.pos.z)).toBeGreaterThan(3);
 
-  await page.locator('canvas').click();
+  // The HUD has a second canvas (the minimap), so the match canvas is selected by its class.
+  await page.locator('canvas.play-canvas').click();
   const fired = await readView(page);
   expect(fired.shots).toBeGreaterThan(before.shots);
 });
@@ -49,7 +50,7 @@ test('substation map loads and plays with no page errors', async ({ page }) => {
 
   await page.goto('/next.html?debug');
   await page.getByRole('button', { name: 'Deploy' }).click();
-  await expect(page.getByText('Substation.', { exact: false })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Substation', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Launch mission' }).click();
 
   // Let a few frames render, so a shader or render error would surface here.
@@ -64,7 +65,8 @@ test('a match ends with the debrief when enemy tickets reach 0', async ({ page }
   await page.goto('/next.html?debug');
   await page.getByRole('button', { name: 'Deploy' }).click();
   await page.getByRole('button', { name: 'Launch mission' }).click();
-  await expect.poll(async () => (await readView(page)).state).toBe('play');
+  // The poll allows for a slow software renderer when the workers run in parallel.
+  await expect.poll(async () => (await readView(page)).state, { timeout: 30_000 }).toBe('play');
 
   // The one debug write: the enemy ticket pool goes to 0, so the next tick ends the match as a win.
   await page.evaluate(() => {
@@ -73,5 +75,5 @@ test('a match ends with the debrief when enemy tickets reach 0', async ({ page }
 
   await expect(page.getByRole('heading', { name: 'Sector Secured' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Redeploy' })).toBeVisible();
-  await expect.poll(async () => (await readView(page)).state).toBe('over');
+  await expect.poll(async () => (await readView(page)).state, { timeout: 30_000 }).toBe('over');
 });
