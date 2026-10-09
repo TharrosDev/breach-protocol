@@ -1,3 +1,5 @@
+import { getMap, MAP_DESCRIPTIONS } from '../content/maps';
+import { loadLoadout } from '../persist/store';
 import { detectCapabilities } from './capabilities';
 import { startGame } from './game';
 import './shell.css';
@@ -22,11 +24,13 @@ function menuScreen(root: HTMLElement): HTMLElement {
 function briefScreen(root: HTMLElement): HTMLElement {
   const main = el('main', 'shell');
   main.append(el('h1', 'title', 'Mission brief'));
+  // The map comes from the saved loadout, the same one startGame reads.
+  const mapId = loadLoadout().map;
   main.append(
     el(
       'p',
       'note',
-      'Compound. Move, slide, jump and vault, then fire at the dummy targets. Pointer lock is requested when the mission starts.',
+      `${getMap(mapId).name}. ${MAP_DESCRIPTIONS[mapId]} Move, slide, jump and vault, then fire at the dummy targets. Pointer lock is requested when the mission starts.`,
     ),
   );
   const launch = el('button', 'primary', 'Launch mission');
