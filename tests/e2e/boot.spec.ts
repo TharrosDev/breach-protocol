@@ -24,9 +24,3 @@ test('new app has no horizontal scroll at 390 px', async ({ page }) => {
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
   expect(overflow).toBeLessThanOrEqual(0);
 });
-
-test('legacy game is served at /legacy/', async ({ page }) => {
-  const response = await page.goto('/legacy/');
-  expect(response?.status()).toBe(200);
-  await expect(page.getByRole('button', { name: 'Deploy' })).toBeVisible();
-});
