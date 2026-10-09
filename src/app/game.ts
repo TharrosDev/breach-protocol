@@ -43,8 +43,7 @@
  *     audio the match runs silent. Sim changes for the sounds: playerFire now carries the weapon and whether it is
  *     suppressed, and two events are new: grenadeDetonated (flash and smoke) and medkitUsed.
  *     Deviations from legacy, for review:
- *     - Melee has no sound. The sim has no melee action yet (the Q key is bound and shown in the HUD, but nothing
- *       happens), so there is no event to map. The 'melee' recipe is in synth.ts for when melee is built.
+ *     - The knife plays its swing on every swing, hit or miss (the sim's 'melee' event, sim/melee.ts).
  *     - A medkit sounds only when it heals. The sim ignores a medkit at full health (sim/gadgets.ts). Legacy
  *       useMedkit played the tone on every use.
  *     - The kill tone is played for kills by operators as well as by the player, as legacy damageEnemy does.
@@ -252,6 +251,8 @@ const FPS_STALL_S = 1;
 const DOWNGRADE_MESSAGE = 'Graphics lowered to keep the framerate up';
 const CONTEXT_LOST_MESSAGE = 'Graphics reset. Restoring…';
 const POINTER_REFUSED_MESSAGE = 'Mouse capture was refused. Click the game to capture the mouse.';
+const FRAME_FAULT_MESSAGE =
+  'Something went wrong. The match is paused; resume to keep playing or leave to the menu.';
 // Legacy muzzle light (index.html:656, 2918-2924).
 const MUZZLE_COLOR = 0xffb060;
 const MUZZLE_INTENSITY = 3;
@@ -670,6 +671,8 @@ function runSession(
       keyboard.clear();
       mouse.clear();
       fireClick = false;
+      // A hidden tab stops the frames. Pause, so the match does not run on without a player.
+      pause();
     }
   };
   document.addEventListener('visibilitychange', onVisibility);
@@ -1187,7 +1190,7 @@ function runSession(
   };
 
   const frame = (now: number): void => {
-    raf = requestAnimationFrame(frame);
+    raf = requestAnimationFrame(guardedFrame);
     const frameDt = last === null ? 0 : (now - last) / 1000;
     last = now;
     const inPlay = state === 'play';
@@ -1268,6 +1271,8 @@ function runSession(
       showGun(inHand);
       vm.gunKick = 0;
     }
+    // The sim owns the knife timer; the viewmodel thrust follows it.
+    vm.meleeT = sim.meleeT;
     const pose = gunPose(vm, {
       adsT: P.adsT,
       moving: P.moving,
@@ -1310,6 +1315,22 @@ function runSession(
     }
   };
 
+  // A fault in one frame must not leave a silent, frozen match. The first fault pauses play and says so. Later faults
+  // are counted and not logged again, so a fault that repeats every frame cannot flood the console.
+  let frameFaults = 0;
+  const guardedFrame = (now: number): void => {
+    try {
+      frame(now);
+    } catch (err) {
+      frameFaults += 1;
+      if (frameFaults === 1) {
+        console.error('Frame failed; pausing the match.', err);
+        hudState.feed(FRAME_FAULT_MESSAGE, 'warn');
+        pause();
+      }
+    }
+  };
+
   if (opts.debug) {
     installDebugHook({
       player: () => P,
@@ -1323,7 +1344,7 @@ function runSession(
   }
 
   // The render loop starts here. The pointer lock was asked for at the Launch click (above).
-  raf = requestAnimationFrame(frame);
+  raf = requestAnimationFrame(guardedFrame);
 
   return {
     state: () => state,

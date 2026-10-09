@@ -164,6 +164,11 @@ describe('mapSimEventToSound', () => {
     });
   });
 
+  it('a knife swing plays the melee sound, hit or miss', () => {
+    expect(mapSimEventToSound({ type: 'melee', hits: 0 })).toEqual({ type: 'melee' });
+    expect(mapSimEventToSound({ type: 'melee', hits: 2 })).toEqual({ type: 'melee' });
+  });
+
   it('events with no sound of their own map to null', () => {
     const silent: SimEvent[] = [
       {

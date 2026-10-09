@@ -21,6 +21,7 @@ import {
   resolveEnemyShot,
 } from './combat';
 import { hitDamage } from './ballistics';
+import { MELEE_ALERT_RADIUS, MELEE_COOLDOWN, MELEE_TIME, meleeStrike } from './melee';
 import {
   damageOperator,
   damagePlayer,
@@ -200,6 +201,8 @@ export type SimEvent =
   | { type: 'airstrikeBlast'; at: Vec3; radius: number }
   | { type: 'breachBlast'; at: Vec3; radius: number; box: BoxId }
   | { type: 'resupplied' }
+  // The knife was swung. hits is how many hostiles it reached (0 for a miss).
+  | { type: 'melee'; hits: number }
   // A medkit was used and restored `healed` hp. Added for the audio side.
   | { type: 'medkitUsed'; healed: number }
   | { type: 'playerFlashed'; seconds: number }
@@ -251,6 +254,9 @@ export class SimWorld {
   playerShots = 0;
   playerHits = 0;
   playerKills = 0;
+  // Knife timers: seconds until the next swing (legacy P.meleeCd) and swing animation left (legacy P.meleeT).
+  meleeCd = 0;
+  meleeT = 0;
 
   private readonly tickets: TicketState = { enemyTickets: 0, startTickets: 0 };
   // play until the match ends; then the result is kept (endMatch is idempotent).
@@ -328,6 +334,8 @@ export class SimWorld {
       this.order = ((this.order + 1) % ORDER_COUNT) as 0 | 1 | 2;
       events.push({ type: 'orderChanged', order: this.order });
     }
+    this.meleeCd = Math.max(0, this.meleeCd - dt);
+    this.meleeT = Math.max(0, this.meleeT - dt);
     stepPlayer(p, cmd, this.collision, dt, {
       lightweight: this.opts.perk === 'lightweight',
       adsRate: this.opts.adsRate,
@@ -428,6 +436,8 @@ export class SimWorld {
     this.playerShots = 0;
     this.playerHits = 0;
     this.playerKills = 0;
+    this.meleeCd = 0;
+    this.meleeT = 0;
     this.grenades = [];
     this.smokes = [];
     this.turrets = [];
@@ -865,6 +875,20 @@ export class SimWorld {
     if (pressed.has('gadget2')) this.useGadgetSlot(1, events);
     if (pressed.has('interact')) this.interact(events);
     if (pressed.has('killstreak')) this.useKillstreak(events);
+    if (pressed.has('melee')) this.melee(events);
+  }
+
+  // The knife (legacy melee, index.html:3244-3256). Blocked when dead, sprinting or on cooldown. Every hostile in the
+  // cone takes the hit, more from behind. The swing alerts hostiles close by.
+  private melee(events: SimEvent[]): void {
+    const p = this.player;
+    if (!p.alive || this.meleeCd > 0 || p.sprinting) return;
+    this.meleeCd = MELEE_COOLDOWN;
+    this.meleeT = MELEE_TIME;
+    const hits = meleeStrike(p.pos, p.yaw, this.enemies);
+    events.push({ type: 'melee', hits: hits.length });
+    for (const h of hits) this.hurtEnemy(h.enemy, h.damage, false, 'player', events);
+    alertEnemies(this.enemies, p.pos.x, p.pos.z, MELEE_ALERT_RADIUS);
   }
 
   // Puts a weapon in hand (legacy switchWeapon, index.html:1804-1808). Asking for the slot already in hand, or asking
