@@ -7,8 +7,8 @@ export const PLAY_TIMEOUT_MS = 90_000;
 // Screen names as the screens set them in data-screen (ui/screens/*), used by the specs to find a screen root.
 export type ScreenName = 'menu' | 'brief' | 'loadout' | 'settings' | 'pause' | 'debrief';
 
-export const APP_URL = '/next.html';
-export const DEBUG_URL = '/next.html?debug';
+export const APP_URL = '/';
+export const DEBUG_URL = '/?debug';
 
 // Seen-intro flag set, so the one-time control hints never cover the HUD in a test.
 export const SEEN_INTRO = 'bp_intro';

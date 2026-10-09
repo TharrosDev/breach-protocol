@@ -20,7 +20,7 @@ const PLAY_TIMEOUT_MS = 90_000;
 
 test('deploy, move, fire at a dummy', async ({ page }) => {
   test.setTimeout(PLAY_TIMEOUT_MS);
-  await page.goto('/next.html?debug');
+  await page.goto('/?debug');
   await page.getByRole('button', { name: 'Deploy' }).click();
   await page.getByRole('button', { name: 'Launch mission' }).click();
 
@@ -48,7 +48,7 @@ test('substation map loads and plays with no page errors', async ({ page }) => {
     localStorage.setItem('bp_loadout', JSON.stringify({ map: 'substation' }));
   });
 
-  await page.goto('/next.html?debug');
+  await page.goto('/?debug');
   await page.getByRole('button', { name: 'Deploy' }).click();
   await expect(page.getByRole('heading', { name: 'Substation', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Launch mission' }).click();
@@ -62,7 +62,7 @@ test('substation map loads and plays with no page errors', async ({ page }) => {
 
 test('a match ends with the debrief when enemy tickets reach 0', async ({ page }) => {
   test.setTimeout(PLAY_TIMEOUT_MS);
-  await page.goto('/next.html?debug');
+  await page.goto('/?debug');
   await page.getByRole('button', { name: 'Deploy' }).click();
   await page.getByRole('button', { name: 'Launch mission' }).click();
   // The poll allows for a slow software renderer when the workers run in parallel.
