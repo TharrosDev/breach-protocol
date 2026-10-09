@@ -1,18 +1,44 @@
 import { detectCapabilities } from './capabilities';
+import { startGame } from './game';
 import './shell.css';
 
 export function boot(root: HTMLElement): void {
   const caps = detectCapabilities();
-  root.replaceChildren(caps.webgl2 ? menuPlaceholder() : webglMessage());
+  root.replaceChildren(caps.webgl2 ? menuScreen(root) : webglMessage());
 }
 
-function menuPlaceholder(): HTMLElement {
+// Two steps: Deploy shows the mission brief, and Launch mission starts the match.
+function menuScreen(root: HTMLElement): HTMLElement {
   const main = el('main', 'shell');
   main.append(el('h1', 'title', 'Breach Protocol'));
   const deploy = el('button', 'primary', 'Deploy');
-  deploy.disabled = true;
-  deploy.title = 'Coming in phase 1';
+  deploy.addEventListener('click', () => {
+    root.replaceChildren(briefScreen(root));
+  });
   main.append(deploy, el('p', 'note', 'Rebuild in progress. The original game is at /legacy/.'));
+  return main;
+}
+
+function briefScreen(root: HTMLElement): HTMLElement {
+  const main = el('main', 'shell');
+  main.append(el('h1', 'title', 'Mission brief'));
+  main.append(
+    el(
+      'p',
+      'note',
+      'Compound. Move, slide, jump and vault, then fire at the dummy targets. Pointer lock is requested when the mission starts.',
+    ),
+  );
+  const launch = el('button', 'primary', 'Launch mission');
+  launch.addEventListener('click', () => {
+    const debug = new URLSearchParams(location.search).has('debug');
+    startGame(root, { debug });
+  });
+  const back = el('button', 'secondary', 'Back');
+  back.addEventListener('click', () => {
+    boot(root);
+  });
+  main.append(launch, back);
   return main;
 }
 
