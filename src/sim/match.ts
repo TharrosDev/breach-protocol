@@ -3,6 +3,12 @@
 
 export type MatchState = 'menu' | 'brief' | 'play' | 'paused' | 'over';
 
+// One objective as the debrief lists it: its name and whether the player's side holds it at the end.
+export interface MatchZone {
+  name: string;
+  captured: boolean;
+}
+
 export interface MatchSummaryInput {
   score: number;
   kills: number;
@@ -14,6 +20,13 @@ export interface MatchSummaryInput {
   // Display names (legacy CUR.name and DIFF[id].name).
   mapName: string;
   difficulty: string;
+  // Player shots fired (one per trigger pull, legacy P.shots) and bullets that hit a hostile (legacy P.hits).
+  shots: number;
+  hits: number;
+  // Consecutive kills at the moment the match ended (legacy P.streak).
+  streak: number;
+  // Objectives in map order.
+  zones: readonly MatchZone[];
 }
 
 export interface MatchResult extends MatchSummaryInput {
@@ -79,6 +92,10 @@ export function endMatch(
       seconds: summary.seconds,
       mapName: summary.mapName,
       difficulty: summary.difficulty,
+      shots: summary.shots,
+      hits: summary.hits,
+      streak: summary.streak,
+      zones: summary.zones.map((z) => ({ name: z.name, captured: z.captured })),
     },
   };
 }

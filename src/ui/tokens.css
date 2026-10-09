@@ -1,0 +1,38 @@
+/* Colour tokens. Values must match TOKENS in tokens.ts (tests/unit/tokens.test.ts checks this).
+   The default is the normal palette. Setting data-colour="colourblind" on <html> swaps in the colour-blind palette. */
+
+:root {
+  --tok-hostile: #ff3b3b;
+  --tok-friendly: #58b7ff;
+  --tok-objective-idle: #ff4d4d;
+  --tok-objective-capturing: #58b7ff;
+  --tok-objective-contested: #ffb020;
+  --tok-objective-captured: #4dff9a;
+  --tok-health: #4dff9a;
+  --tok-health-low: #ff5a4f;
+  --tok-hit: #ff5a5a;
+  --tok-kill: #ffd27a;
+  --tok-warning: #ffb020;
+  --tok-good: #4dff9a;
+  --tok-ink: #e8eef8;
+  --tok-mute: #8ea0ba;
+  --tok-panel: rgba(9, 13, 20, 0.84);
+}
+
+:root[data-colour='colourblind'] {
+  --tok-hostile: #ffb000;
+  --tok-friendly: #2f6bff;
+  --tok-objective-idle: #e6e6e6;
+  --tok-objective-capturing: #9ad0ff;
+  --tok-objective-contested: #ffb000;
+  --tok-objective-captured: #2f6bff;
+  --tok-health: #2f6bff;
+  --tok-health-low: #ffb000;
+  --tok-hit: #ffffff;
+  --tok-kill: #ffd27a;
+  --tok-warning: #ffb000;
+  --tok-good: #2f6bff;
+  --tok-ink: #e8eef8;
+  --tok-mute: #8ea0ba;
+  --tok-panel: rgba(9, 13, 20, 0.84);
+}

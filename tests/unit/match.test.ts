@@ -19,6 +19,14 @@ const summary: MatchSummaryInput = {
   seconds: 412.7,
   mapName: 'Compound',
   difficulty: 'Veteran',
+  shots: 120,
+  hits: 41,
+  streak: 3,
+  zones: [
+    { name: 'ALPHA', captured: true },
+    { name: 'BRAVO', captured: true },
+    { name: 'CHARLIE', captured: false },
+  ],
 };
 
 describe('match state transitions', () => {

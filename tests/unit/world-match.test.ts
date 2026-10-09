@@ -103,6 +103,24 @@ describe('match outcome', () => {
     expect(sim.result?.win).toBe(true);
   });
 
+  it('the result carries the debrief fields: shots, hits, streak and the objectives', () => {
+    const sim = openFieldSim();
+    sim.playerShots = 12;
+    sim.playerHits = 5;
+    sim.streak = 3;
+    sim.forceEnemyTickets(0);
+
+    sim.step(IDLE, DT);
+
+    expect(sim.result).toMatchObject({
+      win: true,
+      shots: 12,
+      hits: 5,
+      streak: 3,
+      zones: [{ name: 'Far', captured: false }],
+    });
+  });
+
   it('win: every zone captured', () => {
     const { sim } = compoundSim();
     for (const z of sim.zones) z.captured = true;
