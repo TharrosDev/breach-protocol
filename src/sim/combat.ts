@@ -31,9 +31,9 @@ const HIT_HEAD_R = 0.2;
 const HEAVY_BODY_MULT = 0.6;
 const ENEMY_DEATH_T = 4;
 const FLINCH_T = 0.12;
-// Score and tickets for a kill (index.html:2531-2535, 2524).
-const KILL_SCORE = 100;
-const HEADSHOT_BONUS = 50;
+// Score for a player kill and the headshot bonus (index.html:2531-2535).
+export const KILL_SCORE = 100;
+export const HEADSHOT_BONUS = 50;
 
 export interface ShotResult {
   hit: boolean;

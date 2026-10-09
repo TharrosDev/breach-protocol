@@ -123,3 +123,12 @@ body {
   font-weight: 600;
   pointer-events: none;
 }
+
+/* The debrief covers the match canvas. The shell padding keeps the 16 px side gutter at phone width. */
+.end-screen {
+  position: fixed;
+  inset: 0;
+  z-index: 3;
+  overflow-y: auto;
+  background: rgb(7 10 16 / 0.85);
+}

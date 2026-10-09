@@ -2,15 +2,24 @@ import type { Vec2, Vec3 } from '../core/math';
 import type { Rng } from '../core/rng';
 import type { DifficultyDef } from '../content/difficulty';
 import { ENEMY_DEFS, type EnemyKindId } from '../content/enemies';
+import type { Action, GadgetId } from '../content/ids';
+import { AIRSTRIKE_AIM_DIST, type KillstreakId } from '../content/killstreaks';
 import type { Attachment, Perk, WeaponDef } from '../content/weapons';
 import { RESPAWN_TIME } from '../content/tuning';
 import type { Command } from '../input/commands';
-import type { CollisionWorld } from './collision';
+import type { BoxId, CollisionWorld } from './collision';
 import type { AiEvent, AiWorld, Enemy, Operator, Target } from './entities';
 import { alertEnemies, stepHostile } from './ai/hostile';
 import { GridNav } from './nav/grid';
 import type { PathBudget } from './nav/types';
-import { damageEnemy, EYE_HEIGHT, nearestEnemyHit, resolveEnemyShot } from './combat';
+import {
+  damageEnemy,
+  EYE_HEIGHT,
+  HEADSHOT_BONUS,
+  KILL_SCORE,
+  nearestEnemyHit,
+  resolveEnemyShot,
+} from './combat';
 import { hitDamage } from './ballistics';
 import {
   damageOperator,
@@ -33,10 +42,39 @@ import {
   type FireResult,
   type WeaponState,
 } from './weapons';
+import { applyKill, applyZoneCapture, matchOutcome, type TicketState } from './tickets';
+import { createZone, updateZones, ZONE_CAPTURE_SCORE, type Zone } from './objectives';
+import { endMatch, type MatchOver, type MatchResult, type MatchSummaryInput, type MatchState } from './match';
+import {
+  awardKillstreak,
+  createUav,
+  spendKillstreak,
+  stepUav,
+  takeKillstreak,
+  type KillstreakSlot,
+  type UavState,
+} from './killstreaks';
+import { placeSentry, stepTurrets, type Turret } from './turret';
+import { createAirstrike, stepAirstrike, type AirstrikeState } from './airstrike';
+import { createGadgetSlot, useGadget, type GadgetSlot } from './gadgets';
+import {
+  FRAG_RADIUS,
+  makeGrenade,
+  stepGrenades,
+  stepSmokes,
+  type Grenade,
+  type GrenadeContext,
+  type GrenadeEvent,
+  type SmokeCloud,
+} from './grenades';
+import { BLAST_RADIUS, createBreach, plantBreach, stepBreach, type BreachState } from './breach';
+import { stepDrone, type DroneState } from './drone';
+import { createCrates, nearestCrate, resupply, stepCrates, type CrateState } from './resupply';
 
-// Match simulation: the player, the operator squad, hostiles, waves, enemy grenades and the match
-// outcome. One call to step() is one fixed tick. Port of the legacy update() order (index.html:2907-2960)
-// and its helpers. No DOM or THREE imports: the render side reads the public fields and the events.
+// Match simulation: the player, the operator squad, hostiles, waves, grenades, smokes, gadgets, breach charges,
+// crates, killstreaks, the zones, tickets and the match outcome. One call to step() is one fixed tick. Port of the
+// legacy update() order (index.html:2907-2960) and its helpers. No DOM or THREE imports: the render side reads the
+// public fields and the events.
 
 // index.html:2909 (two A* searches per tick).
 const PATH_BUDGET_PER_TICK = 2;
@@ -59,29 +97,14 @@ const THROW_T = 1.2;
 const THROW_FUSE_EXTRA = 0.25;
 const THROW_LOB_Y = 0.3;
 const THROW_LOB_G = 8;
-// index.html:1945-1965 (grenade flight: gravity 16, floor 0.12, bounces and damping).
-const GRENADE_G = 16;
-const GRENADE_FLOOR = 0.12;
-const GRENADE_BOUNCE = 0.35;
-const GRENADE_SIDE_DAMP = 0.6;
-const GRENADE_WALL_DAMP = 0.3;
-// index.html:1966-1980 (enemy frag: 7 m radius, 80 to the player and 90 to operators, linear falloff).
-const FRAG_RADIUS = 7;
-const FRAG_PLAYER_DAMAGE = 80;
-const FRAG_OPERATOR_DAMAGE = 90;
-// index.html:1975 (the player's body for grenade damage is 1 m above the feet).
-const PLAYER_GRENADE_Y = 1;
-const OPERATOR_GRENADE_Y = 1;
-// index.html:866-872 (legacy losClear shortens the ray by 0.05 m).
-const LOS_MARGIN = 0.05;
+// index.html:1303-1310 (groundAim): a downward aim reaches at most 1.5 times the requested distance; a level or
+// upward aim uses a point 8 m ahead.
+const GROUND_AIM_REACH = 1.5;
+const GROUND_AIM_LEVEL_DIST = 8;
+const GROUND_AIM_DOWN_LIMIT = -0.05;
+// index.html:473 (squad orders: 0 ATTACK, 1 HOLD, 2 FOLLOW).
+const ORDER_COUNT = 3;
 const TAU = Math.PI * 2;
-
-// Zone state the AI reads. Capture is Phase 4, so `captured` stays false for now.
-export interface ZoneState {
-  x: number;
-  z: number;
-  captured: boolean;
-}
 
 // A rectangle in XZ, as the building footprints of the map (legacy RECTS).
 export interface BuildingFootprint {
@@ -91,10 +114,17 @@ export interface BuildingFootprint {
   z1: number;
 }
 
+// A capture zone as the map defines it. The name is shown in the feed (legacy ZONES entries).
+export interface ZoneDef {
+  name: string;
+  x: number;
+  z: number;
+}
+
 export interface SimOptions {
   collision: CollisionWorld;
-  // Zone centres, in map order.
-  zones: readonly Vec2[];
+  // Capture zones, in map order.
+  zones: readonly ZoneDef[];
   // Respawn and ring spawn points from the map (legacy SPAWNS).
   spawns: readonly Vec2[];
   buildings: readonly BuildingFootprint[];
@@ -107,6 +137,12 @@ export interface SimOptions {
   adsRate: number;
   playerSpawn: Vec3;
   playerYaw: number;
+  // The two loadout gadgets, slot 0 and slot 1 (legacy P.gadgets).
+  gadgets: readonly [GadgetId, GadgetId];
+  // Resupply crate positions (legacy crates array, MapHandle.pickups).
+  crates: readonly Vec2[];
+  // Map display name, used in the debrief line.
+  mapName: string;
 }
 
 // Player state the sim owns. hp and alive come from PlayerState, the rest are the health record.
@@ -114,14 +150,8 @@ export interface PlayerRecord extends PlayerState {
   lastHurt: number;
   downed: boolean;
   bleedT: number;
-  // Seconds until respawn while eliminated (legacy P.deathT).
+  // Seconds until respawn while eliminated (legacy P.deathT). Zero when no respawn is pending.
   deathT: number;
-}
-
-export interface Grenade {
-  pos: Vec3;
-  vel: Vec3;
-  fuse: number;
 }
 
 export type MatchOutcome = 'playing' | 'won' | 'lost';
@@ -154,34 +184,62 @@ export type SimEvent =
   | { type: 'grenadeThrown'; from: Vec3; to: Vec2 }
   | { type: 'grenadeBlast'; at: Vec3; radius: number }
   | { type: 'orderChanged'; order: 0 | 1 | 2 }
-  | { type: 'outcome'; result: 'won' | 'lost' };
+  | { type: 'zoneCaptured'; name: string; playerBonus: boolean }
+  | { type: 'killstreakEarned'; id: KillstreakId }
+  | { type: 'killstreakUsed'; id: KillstreakId }
+  | { type: 'sentryNoGround' }
+  | { type: 'turretShot'; from: Vec3; to: Vec3; hit: boolean }
+  | { type: 'airstrikeBlast'; at: Vec3; radius: number }
+  | { type: 'breachBlast'; at: Vec3; radius: number; box: BoxId }
+  | { type: 'resupplied' }
+  | { type: 'playerFlashed'; seconds: number }
+  | { type: 'matchEnd'; result: MatchResult };
 
 export type SimEvents = SimEvent[];
-
-// Squad orders (legacy ORDERS, index.html:473): 0 ATTACK, 1 HOLD, 2 FOLLOW.
-const ORDER_COUNT = 3;
 
 export class SimWorld {
   readonly player: PlayerRecord;
   readonly collision: CollisionWorld;
   readonly nav: GridNav;
   readonly rng: Rng;
-  readonly zones: ZoneState[];
+  // Capture zones in map order (objectives.ts). Their captured flags feed the AI and the waves.
+  readonly zones: Zone[];
   weapon: WeaponState;
   enemies: Enemy[] = [];
   operators: Operator[] = [];
+  // Grenades in flight (player and enemy) and smoke clouds. Smoke blocks sight and fire.
   grenades: Grenade[] = [];
+  smokes: SmokeCloud[] = [];
+  // Killstreak effects in play: sentry turrets, airstrikes in progress, the UAV clock and the recon drone.
+  turrets: Turret[] = [];
+  airstrikes: AirstrikeState[] = [];
+  uav: UavState = { t: 0 };
+  drone: DroneState | null = null;
+  // Breach charges and the armed plant; resupply crates; the two loadout gadgets.
+  breach: BreachState = createBreach();
+  gadgets: GadgetSlot[] = [];
+  crates: CrateState[] = [];
+  // The killstreak held for H (legacy P.ks) and killstreaks used (legacy P.ksUsed).
+  killstreak: KillstreakSlot = { ks: null, ksUsed: 0 };
   time = 0;
-  enemyTickets = 0;
+  // Reinforcements left (legacy P.lives).
   lives = 0;
   wave: WaveState = { wave: 0, waveT: 0 };
-  outcome: MatchOutcome = 'playing';
   order: 0 | 1 | 2 = 0;
+  // Seconds of player blindness left from a flashbang (legacy P.flashT).
+  flashT = 0;
+  // Score and the player's record for the debrief (legacy P.score, P.kills, P.deaths, P.streak).
+  score = 0;
+  deaths = 0;
+  streak = 0;
   // Counters the debug hook and the HUD read: player shots, bullets that hit a hostile, player kills.
   playerShots = 0;
   playerHits = 0;
   playerKills = 0;
 
+  private readonly tickets: TicketState = { enemyTickets: 0, startTickets: 0 };
+  // play until the match ends; then the result is kept (endMatch is idempotent).
+  private matchState: Exclude<MatchState, 'over'> | MatchOver = 'play';
   private readonly zoneCentres: Vec2[];
   private readonly spawn0: Vec2;
   private pathLeft = 0;
@@ -198,23 +256,49 @@ export class SimWorld {
     this.rng = opts.rng;
     this.nav = new GridNav(opts.collision);
     this.zoneCentres = opts.zones.map((z) => ({ x: z.x, z: z.z }));
-    this.zones = this.zoneCentres.map((z) => ({ x: z.x, z: z.z, captured: false }));
+    this.zones = opts.zones.map((z) => createZone(z));
     this.spawn0 = opts.spawns[0] ?? { x: opts.playerSpawn.x, z: opts.playerSpawn.z };
     this.player = newPlayerRecord(opts.playerSpawn, opts.playerYaw);
     this.weapon = makeWeaponState(opts.weapon, opts.attachment);
-    this.startMatch();
+    this.resetMatch();
   }
 
   // Starts a new match on the same map: legacy resetMatch (index.html:2611-2640). Map colliders stay.
   restart(): void {
-    this.startMatch();
+    this.resetMatch();
+  }
+
+  // Enemy tickets left. The win condition is this reaching 0.
+  get enemyTickets(): number {
+    return this.tickets.enemyTickets;
+  }
+
+  // The match result once the match has ended, or null while it runs.
+  get result(): MatchResult | null {
+    return typeof this.matchState === 'object' ? this.matchState.result : null;
+  }
+
+  get outcome(): MatchOutcome {
+    const r = this.result;
+    if (r === null) return 'playing';
+    return r.win ? 'won' : 'lost';
+  }
+
+  // Hostiles revealed right now: alive and with a spot above zero (UAV or drone). For the HUD.
+  get spotted(): readonly Enemy[] {
+    return this.enemies.filter((e) => e.alive && e.spot > 0);
+  }
+
+  // Debug seam only (the ?debug hook): sets the enemy ticket pool, so the win can be reached without play.
+  forceEnemyTickets(n: number): void {
+    this.tickets.enemyTickets = n;
   }
 
   // Advances one fixed tick and returns the events it produced. Once the match is over, step does nothing.
-  // fireClick is a latched click for this tick (the mouse fire edge); held fire comes from cmd.buttons.
+  // fireClick is a latched click for this tick (the mouse fire edge); held fire comes from cmd.buttons.fire.
   step(cmd: Command, dt: number, fireClick = false): SimEvents {
     const events: SimEvent[] = [];
-    if (this.outcome !== 'playing') return events;
+    if (this.result !== null) return events;
     const p = this.player;
     this.time += dt;
     this.pathLeft = PATH_BUDGET_PER_TICK;
@@ -228,6 +312,7 @@ export class SimWorld {
       adsRate: this.opts.adsRate,
     });
     if (cmd.pressed.has('reload') && p.alive) startReload(this.weapon, this.opts.perk);
+    this.handlePresses(cmd.pressed, events);
 
     // Legacy updWeapons (index.html:1841-1854): spread recovers, then a trigger pull fires.
     tickWeapon(this.weapon, dt, cmd.buttons.fire, this.opts.perk);
@@ -242,7 +327,14 @@ export class SimWorld {
       if (shot !== null) this.fire(shot, events);
     }
 
-    this.stepGrenades(dt, events);
+    this.stepThrown(dt, events);
+    this.stepBreachCharge(dt, events);
+    stepUav(this.uav, this.enemies, dt);
+    if (this.drone !== null) this.drone = stepDrone(this.drone, dt, this.enemies);
+    this.stepSentries(dt, events);
+    this.stepAirstrikes(dt, events);
+    stepCrates(this.crates, dt);
+    this.flashT = Math.max(0, this.flashT - dt);
 
     for (const e of this.enemies) {
       for (const ev of stepHostile(e, this.aiWorld(), dt)) this.onEnemyEvent(ev, events);
@@ -251,7 +343,7 @@ export class SimWorld {
     for (const a of this.operators) {
       for (const ev of updOperator(a, this.aiWorld(), dt, { playerDowned: p.downed, spawn: this.spawn0 })) {
         if (ev.type === 'revive') {
-          revivePlayer(p);
+          this.score += revivePlayer(p).scoreDelta;
           events.push({ type: 'playerRevived', by: ev.by.name });
         } else if (ev.type === 'operatorFire') {
           this.operatorFire(ev.operator, ev.enemy, events);
@@ -262,6 +354,8 @@ export class SimWorld {
     // Dead hostiles stay for 4 s, then leave the list (legacy index.html:2938-2941).
     this.enemies = this.enemies.filter((e) => e.alive || e.deathT > 0);
 
+    this.stepZones(dt, events);
+
     const waveBefore = this.wave.wave;
     const alive = this.enemies.reduce((n, e) => (e.alive ? n + 1 : n), 0);
     const { spawnCount } = waveTick(
@@ -270,7 +364,7 @@ export class SimWorld {
       alive,
       this.opts.difficulty,
       this.zones.some((z) => !z.captured),
-      this.enemyTickets,
+      this.tickets.enemyTickets,
     );
     if (this.wave.wave !== waveBefore)
       events.push({ type: 'wave', wave: this.wave.wave, spawned: spawnCount });
@@ -283,29 +377,48 @@ export class SimWorld {
         p.bleedT = 0;
         this.playerDie(events);
       }
-    } else if (!p.alive) {
+    } else if (!p.alive && p.deathT > 0) {
       p.deathT -= dt;
       if (p.deathT <= 0) this.respawnPlayer(events);
     }
     if (p.alive) p.hp = passiveRegen(p.hp, dt, this.time, p.lastHurt);
 
-    if (this.enemyTickets <= 0) this.end('won', events);
+    this.checkOutcome(events);
     return events;
   }
 
   // Resets the match state in place: legacy resetMatch (index.html:2611-2640).
-  private startMatch(): void {
+  private resetMatch(): void {
     const d = this.opts.difficulty;
     this.time = 0;
-    this.outcome = 'playing';
-    this.enemyTickets = d.tickets;
+    this.tickets.enemyTickets = d.tickets;
+    this.tickets.startTickets = d.tickets;
     this.lives = d.lives;
     this.wave = { wave: 0, waveT: d.waveT };
     this.order = 0;
+    this.flashT = 0;
+    this.score = 0;
+    this.deaths = 0;
+    this.streak = 0;
     this.playerShots = 0;
     this.playerHits = 0;
     this.playerKills = 0;
     this.grenades = [];
+    this.smokes = [];
+    this.turrets = [];
+    this.airstrikes = [];
+    this.uav = { t: 0 };
+    this.drone = null;
+    this.breach = createBreach();
+    this.gadgets = this.opts.gadgets.map((id) => createGadgetSlot(id));
+    this.crates = createCrates(this.opts.crates);
+    this.killstreak = { ks: null, ksUsed: 0 };
+    for (const z of this.zones) {
+      z.prog = 0;
+      z.captured = false;
+      z.status = 'idle';
+    }
+    this.matchState = 'play';
     this.weapon = makeWeaponState(this.opts.weapon, this.opts.attachment);
     Object.assign(this.player, newPlayerRecord(this.opts.playerSpawn, this.opts.playerYaw));
     const base = { x: this.opts.playerSpawn.x, z: this.opts.playerSpawn.z };
@@ -333,7 +446,7 @@ export class SimWorld {
       operators: this.operators,
       nav: this.nav,
       collision: this.collision,
-      smokes: [],
+      smokes: this.smokes,
       zones: this.zones,
       rng: this.rng,
       pathBudget: this.pathBudget,
@@ -372,9 +485,7 @@ export class SimWorld {
         p.eyeHeight,
       );
       events.push({ type: 'enemyShot', shooter: e, from, to: r.end, tracer: r.tracer, hit: r.hit });
-      if (!r.hit) return;
-      events.push({ type: 'playerHit', from: { x: e.pos.x, z: e.pos.z }, damage: r.damage });
-      if (damagePlayer(p, r.damage, this.time).killed) this.onPlayerKilled(events);
+      if (r.hit) this.damagePlayerFrom(e.pos, r.damage, events);
       return;
     }
     const a = this.operators[ev.target.index];
@@ -431,8 +542,7 @@ export class SimWorld {
     p.yaw += (this.rng.next() * 2 - 1) * def.recoilYaw * steady;
 
     const eye: Vec3 = { x: p.pos.x, y: p.pos.y + p.eyeHeight, z: p.pos.z };
-    const cp = Math.cos(p.pitch);
-    const base: Vec3 = { x: Math.sin(p.yaw) * cp, y: Math.sin(p.pitch), z: Math.cos(p.yaw) * cp };
+    const base = this.aimDir();
     for (let i = 0; i < shot.pellets; i++) {
       const dx = base.x + (this.rng.next() * 2 - 1) * shot.spread;
       const dy = base.y + (this.rng.next() * 2 - 1) * shot.spread;
@@ -478,7 +588,7 @@ export class SimWorld {
     this.hurtEnemy(hit.enemy, dealt, hit.head, 'player', events);
   }
 
-  // Applies damage to a hostile and books the kill. The attacker is the player or the operator who shot.
+  // Applies a weapon hit to a hostile. The attacker is the player or the operator who shot.
   private hurtEnemy(
     e: Enemy,
     dmg: number,
@@ -492,18 +602,43 @@ export class SimWorld {
     e.lastSeen = { x: this.player.pos.x, z: this.player.pos.z };
     events.push({ type: 'enemyHit', enemy: e, damage: dmg, head, by });
     if (!r.killed) return;
-    this.enemyTickets = Math.max(0, this.enemyTickets - r.ticketDelta);
-    if (attacker === 'player') this.playerKills += 1;
-    else attacker.kills += 1;
+    if (attacker !== 'player') attacker.kills += 1;
+    this.onEnemyKilled(e, by, head, events);
+  }
+
+  // Books one hostile death. Every kill costs the enemy a ticket (tickets.ts). For the player's kills, the count,
+  // the score (kill 100, headshot +50) and the streak go up, and a killstreak is awarded at 3, 5 and 7 in a row.
+  private onEnemyKilled(e: Enemy, by: 'player' | 'operator', head: boolean, events: SimEvent[]): void {
+    applyKill(this.tickets);
+    if (by === 'player') {
+      this.playerKills += 1;
+      this.streak += 1;
+      this.score += KILL_SCORE + (head ? HEADSHOT_BONUS : 0);
+      const held = this.killstreak.ks;
+      this.killstreak = awardKillstreak(this.killstreak, this.streak);
+      if (this.killstreak.ks !== null && this.killstreak.ks !== held) {
+        events.push({ type: 'killstreakEarned', id: this.killstreak.ks });
+      }
+    }
     events.push({ type: 'enemyKilled', enemy: e, by, head });
   }
 
+  // Applies damage to the player from a hit at `from` (a hostile, a blast centre). Eliminates or downs the player
+  // when hp runs out.
+  private damagePlayerFrom(from: Vec2, damage: number, events: SimEvent[]): void {
+    const p = this.player;
+    if (!p.alive || damage <= 0) return;
+    events.push({ type: 'playerHit', from: { x: from.x, z: from.z }, damage });
+    if (damagePlayer(p, damage, this.time).killed) this.onPlayerKilled(events);
+  }
+
   // Downs the player when a squadmate is near, otherwise eliminates them (legacy killPlayer, index.html:1629-1641).
-  // The legacy also clears the slide and the vault, as done here.
+  // The legacy also clears the slide, the vault and any armed breach charge, as done here.
   private onPlayerKilled(events: SimEvent[]): void {
     const p = this.player;
     p.sliding = 0;
     p.vault = null;
+    this.breach.plant = null;
     const nearby = hasNearbyOperator(p.pos, this.operators);
     if (killPlayerOrDown(p, nearby) === 'down') {
       events.push({ type: 'playerDown' });
@@ -512,15 +647,18 @@ export class SimWorld {
     this.playerDie(events);
   }
 
-  // Legacy playerDie (index.html:1642-1657): spends a reinforcement, or ends the match when none are left.
+  // Legacy playerDie (index.html:1642-1657): counts the death, clears the streak and the held killstreak, and
+  // spends a reinforcement. With no reinforcements left the player stays down (deathT zero) and checkOutcome ends the
+  // match this tick.
   private playerDie(events: SimEvent[]): void {
     const p = this.player;
     p.downed = false;
+    p.deathT = 0;
+    this.deaths += 1;
+    this.streak = 0;
+    this.killstreak = { ks: null, ksUsed: this.killstreak.ksUsed };
     events.push({ type: 'playerEliminated' });
-    if (this.lives <= 0) {
-      this.end('lost', events);
-      return;
-    }
+    if (this.lives <= 0) return;
     this.lives -= 1;
     p.deathT = RESPAWN_TIME;
   }
@@ -555,11 +693,52 @@ export class SimWorld {
     );
   }
 
-  // Ends the match once. A loss earlier in the same tick keeps its result.
-  private end(result: 'won' | 'lost', events: SimEvent[]): void {
-    if (this.outcome !== 'playing') return;
-    this.outcome = result;
-    events.push({ type: 'outcome', result });
+  // Ends the match once the outcome is decided (tickets.ts matchOutcome). Loss is checked first (legacy playerDie
+  // before the win check). A dead player with no reinforcement and no respawn pending is a loss.
+  private checkOutcome(events: SimEvent[]): void {
+    const p = this.player;
+    const playerDead = !p.alive && !p.downed && p.deathT <= 0;
+    const outcome = matchOutcome(this.tickets, this.zones, this.lives, playerDead);
+    if (outcome === 'continue') return;
+    const ended = endMatch(this.matchState, outcome === 'win', this.summary());
+    this.matchState = ended;
+    events.push({ type: 'matchEnd', result: ended.result });
+  }
+
+  private summary(): MatchSummaryInput {
+    return {
+      score: this.score,
+      kills: this.playerKills,
+      deaths: this.deaths,
+      zonesCaptured: this.zones.filter((z) => z.captured).length,
+      zonesTotal: this.zones.length,
+      seconds: this.time,
+      mapName: this.opts.mapName,
+      difficulty: this.opts.difficulty.name,
+    };
+  }
+
+  // Zone capture (objectives.ts). A capture costs the enemy tickets (tickets.ts); the player earns the bonus when
+  // they are inside at the capture. A zone counts a friendly when the living player or an operator is inside, and
+  // a hostile when a living enemy is inside.
+  private stepZones(dt: number, events: SimEvent[]): void {
+    const p = this.player;
+    const playerIn = (z: Zone): boolean => p.alive && within(p.pos, z);
+    const { captures } = updateZones(
+      {
+        zones: this.zones,
+        playerInside: playerIn,
+        operatorInside: (z) => this.operators.some((a) => a.alive && within(a.pos, z)),
+        enemyInside: (z) => this.enemies.some((e) => e.alive && within(e.pos, z)),
+        playerInsideAtCapture: playerIn,
+      },
+      dt,
+    );
+    for (const c of captures) {
+      applyZoneCapture(this.tickets);
+      if (c.playerBonus) this.score += ZONE_CAPTURE_SCORE;
+      events.push({ type: 'zoneCaptured', name: c.zone.name, playerBonus: c.playerBonus });
+    }
   }
 
   // Enemy frag: a throw at the player's position (legacy enemyThrow, index.html:1938-1944).
@@ -570,77 +749,162 @@ export class SimWorld {
       y: (THROW_LOB_Y - start.y + THROW_LOB_G * THROW_T * THROW_T) / THROW_T,
       z: (to.z - start.z) / THROW_T,
     };
-    this.grenades.push({ pos: { ...start }, vel, fuse: THROW_T + THROW_FUSE_EXTRA });
+    this.grenades.push(makeGrenade('enemy', 'frag', start, vel, THROW_T + THROW_FUSE_EXTRA));
     events.push({ type: 'grenadeThrown', from: start, to: { x: to.x, z: to.z } });
   }
 
-  // Grenade flight and fuse (legacy updGrenades, index.html:1945-1965).
-  private stepGrenades(dt: number, events: SimEvent[]): void {
-    for (let i = this.grenades.length - 1; i >= 0; i--) {
-      const g = this.grenades[i];
-      if (g === undefined) continue;
-      g.vel.y -= GRENADE_G * dt;
-      const old = { ...g.pos };
-      g.pos.x += g.vel.x * dt;
-      g.pos.y += g.vel.y * dt;
-      g.pos.z += g.vel.z * dt;
-      if (g.pos.y < GRENADE_FLOOR) {
-        g.pos.y = GRENADE_FLOOR;
-        g.vel.y *= -GRENADE_BOUNCE;
-        g.vel.x *= GRENADE_SIDE_DAMP;
-        g.vel.z *= GRENADE_SIDE_DAMP;
-      }
-      if (this.insideCollider(g.pos)) {
-        g.pos = old;
-        g.vel.x *= -GRENADE_WALL_DAMP;
-        g.vel.z *= -GRENADE_WALL_DAMP;
-      }
-      g.fuse -= dt;
-      if (g.fuse <= 0) {
-        this.explode(g.pos, events);
-        this.grenades.splice(i, 1);
-      }
-    }
-  }
-
-  // Legacy explodeGrenade for an enemy frag (index.html:1966-1981).
-  private explode(at0: Vec3, events: SimEvent[]): void {
-    events.push({ type: 'grenadeBlast', at: { ...at0 }, radius: FRAG_RADIUS });
+  // Grenade flight and fuses, then smoke ageing (grenades.ts stepGrenades and stepSmokes). The player's and the
+  // enemies' grenades share this step.
+  private stepThrown(dt: number, events: SimEvent[]): void {
     const p = this.player;
-    if (p.alive) {
-      const pc: Vec3 = { x: p.pos.x, y: p.pos.y + PLAYER_GRENADE_Y, z: p.pos.z };
-      const dd = dist3(at0, pc);
-      if (dd < FRAG_RADIUS && this.clearLine(at0, pc)) {
-        const dmg = FRAG_PLAYER_DAMAGE * this.opts.difficulty.dmg * (1 - dd / FRAG_RADIUS);
-        events.push({ type: 'playerHit', from: { x: at0.x, z: at0.z }, damage: dmg });
-        if (damagePlayer(p, dmg, this.time).killed) this.onPlayerKilled(events);
-      }
+    const ctx: GrenadeContext = {
+      world: this.collision,
+      enemies: this.enemies,
+      operators: this.operators,
+      smokes: this.smokes,
+      player: { pos: p.pos, eye: this.eye(), aim: this.aimDir(), alive: p.alive },
+      difficulty: { dmg: this.opts.difficulty.dmg },
+    };
+    for (const ev of stepGrenades(this.grenades, dt, ctx)) this.onGrenadeEvent(ev, events);
+    stepSmokes(this.smokes, dt);
+  }
+
+  // Applies one explosion: the player's damage and flash, the kills it made, and the events for the render side.
+  private onGrenadeEvent(ev: GrenadeEvent, events: SimEvent[]): void {
+    if (ev.kind === 'frag') events.push({ type: 'grenadeBlast', at: ev.pos, radius: FRAG_RADIUS });
+    if (ev.playerFlashT > 0) {
+      this.flashT = Math.max(this.flashT, ev.playerFlashT);
+      events.push({ type: 'playerFlashed', seconds: ev.playerFlashT });
     }
-    for (const a of this.operators) {
-      if (!a.alive) continue;
-      const ac: Vec3 = { x: a.pos.x, y: OPERATOR_GRENADE_Y, z: a.pos.z };
-      const dd = dist3(at0, ac);
-      if (dd < FRAG_RADIUS && this.clearLine(at0, ac)) {
-        if (damageOperator(a, FRAG_OPERATOR_DAMAGE * (1 - dd / FRAG_RADIUS)).killed) {
-          killOperator(a);
-          events.push({ type: 'operatorDown', operator: a });
-        }
-      }
+    if (ev.playerDamage > 0) this.damagePlayerFrom(ev.pos, ev.playerDamage, events);
+    for (const e of ev.enemyKills) this.onEnemyKilled(e, 'player', false, events);
+    for (const a of ev.operatorKills) {
+      killOperator(a);
+      events.push({ type: 'operatorDown', operator: a });
     }
   }
 
-  private insideCollider(p: Vec3): boolean {
-    return this.collision
-      .footprints()
-      .some((c) => p.x > c.min.x && p.x < c.max.x && p.z > c.min.z && p.z < c.max.z && p.y < c.max.y);
+  // The armed breach charge (breach.ts stepBreach). A detonation removes the wall from the collision world, so the
+  // nav grid is rebuilt (legacy breakWall, index.html:2093-2105).
+  private stepBreachCharge(dt: number, events: SimEvent[]): void {
+    const armed = this.breach.plant;
+    const step = stepBreach(this.breach, dt, this.collision, this.enemies, this.player.pos);
+    if (!step.exploded) return;
+    if (step.brokenBox !== undefined) this.nav.rebuild();
+    if (armed !== null) {
+      events.push({ type: 'breachBlast', at: armed.point, radius: BLAST_RADIUS, box: armed.box });
+    }
+    for (const e of step.enemyKills) this.onEnemyKilled(e, 'player', false, events);
+    if (step.playerDamage > 0) this.damagePlayerFrom(this.player.pos, step.playerDamage, events);
   }
 
-  // Legacy losClear (index.html:866-872): no collider between a and b, ignoring the last 0.05 m.
-  private clearLine(a: Vec3, b: Vec3): boolean {
-    const dist = dist3(a, b);
-    if (dist < 0.01) return true;
-    const dir: Vec3 = { x: (b.x - a.x) / dist, y: (b.y - a.y) / dist, z: (b.z - a.z) / dist };
-    return this.collision.raycast(a, dir, dist - LOS_MARGIN) === null;
+  // Sentry turrets fire and expire (turret.ts stepTurrets). Kills and damage go through the same bookkeeping as
+  // the player's shots.
+  private stepSentries(dt: number, events: SimEvent[]): void {
+    const shots = stepTurrets(this.turrets, this.enemies, this.collision, this.smokes, this.rng, dt);
+    for (const s of shots) {
+      events.push({ type: 'turretShot', from: s.from, to: s.to, hit: s.hitEnemy !== null });
+      const e = s.hitEnemy;
+      if (e === null) continue;
+      events.push({ type: 'enemyHit', enemy: e, damage: s.damage, head: s.head, by: 'player' });
+      if (s.killed) this.onEnemyKilled(e, 'player', s.head, events);
+    }
+  }
+
+  // Airstrikes in progress (airstrike.ts stepAirstrike). Finished strikes are removed.
+  private stepAirstrikes(dt: number, events: SimEvent[]): void {
+    for (const s of this.airstrikes) {
+      const p = this.player;
+      const step = stepAirstrike(s, dt, this.enemies, this.collision, this.rng, p.alive ? p.pos : null);
+      for (const b of step.blasts) events.push({ type: 'airstrikeBlast', at: b.at, radius: b.radius });
+      for (const e of step.enemyKills) this.onEnemyKilled(e, 'player', false, events);
+      if (step.playerDamage > 0) this.damagePlayerFrom(p.pos, step.playerDamage, events);
+    }
+    this.airstrikes = this.airstrikes.filter((s) => !s.done);
+  }
+
+  // Loadout gadget presses (legacy gadget1, gadget2, interact, killstreak). Gadgets and the killstreak act on the
+  // sim step, so a press is consumed by the tick that reads it.
+  private handlePresses(pressed: ReadonlySet<Action>, events: SimEvent[]): void {
+    if (pressed.has('gadget1')) this.useGadgetSlot(0);
+    if (pressed.has('gadget2')) this.useGadgetSlot(1);
+    if (pressed.has('interact')) this.interact(events);
+    if (pressed.has('killstreak')) this.useKillstreak(events);
+  }
+
+  // Uses a loadout gadget (gadgets.ts useGadget). Grenades join the flight list, the drone is stored until it ends.
+  private useGadgetSlot(index: 0 | 1): void {
+    const r = useGadget(this.gadgets, index, this.player, this.eye(), this.aimDir(), this.drone);
+    if (!r.used) return;
+    if (r.kind === 'grenade') this.grenades.push(r.grenade);
+    else if (r.kind === 'drone') this.drone = r.drone;
+  }
+
+  // Interact (legacy tryInteract, index.html:3236-3241): a resupply crate in reach takes priority, otherwise a
+  // breach charge is planted on the wall in front.
+  private interact(events: SimEvent[]): void {
+    const p = this.player;
+    if (!p.alive) return;
+    const crate = nearestCrate(this.crates, p.pos);
+    if (crate !== null) {
+      const done = resupply(
+        { weapons: [this.weapon], gadgets: this.gadgets, breach: this.breach, player: p },
+        crate,
+      );
+      if (done) events.push({ type: 'resupplied' });
+      return;
+    }
+    plantBreach(this.breach, this.eye(), this.aimDir(), this.collision);
+  }
+
+  // The held killstreak (legacy useKillstreak, index.html:2027-2047). The slot is spent only when the effect happens:
+  // a sentry with no clear ground keeps the killstreak.
+  private useKillstreak(events: SimEvent[]): void {
+    const p = this.player;
+    if (!p.alive) return;
+    const taken = takeKillstreak(this.killstreak);
+    if (taken === null) return;
+    const id = taken.id;
+    if (id === 'uav') {
+      this.uav = createUav();
+    } else if (id === 'sentry') {
+      const placed = placeSentry((dist) => this.groundAim(dist), this.isOpen, p.yaw);
+      if (!placed.placed) {
+        events.push({ type: 'sentryNoGround' });
+        return;
+      }
+      this.turrets.push(placed.turret);
+    } else {
+      this.airstrikes.push(createAirstrike(this.groundAim(AIRSTRIKE_AIM_DIST)));
+    }
+    this.killstreak = spendKillstreak(this.killstreak);
+    events.push({ type: 'killstreakUsed', id });
+  }
+
+  // Legacy groundAim (index.html:1303-1310): where the aim meets the ground, at most maxD away. A level aim uses the
+  // point 8 m ahead.
+  private groundAim(maxD: number): Vec2 {
+    const eye = this.eye();
+    const dir = this.aimDir();
+    if (dir.y < GROUND_AIM_DOWN_LIMIT) {
+      const t = Math.min(maxD * GROUND_AIM_REACH, -eye.y / dir.y);
+      const d = Math.min(t, maxD);
+      return { x: eye.x + dir.x * d, z: eye.z + dir.z * d };
+    }
+    return { x: eye.x + dir.x * GROUND_AIM_LEVEL_DIST, z: eye.z + dir.z * GROUND_AIM_LEVEL_DIST };
+  }
+
+  // Unit view direction (legacy aimDir, index.html:1299-1302).
+  private aimDir(): Vec3 {
+    const p = this.player;
+    const cp = Math.cos(p.pitch);
+    return { x: Math.sin(p.yaw) * cp, y: Math.sin(p.pitch), z: Math.cos(p.yaw) * cp };
+  }
+
+  // Eye position (legacy eyePos, index.html:1298).
+  private eye(): Vec3 {
+    const p = this.player;
+    return { x: p.pos.x, y: p.pos.y + p.eyeHeight, z: p.pos.z };
   }
 }
 
@@ -705,7 +969,7 @@ function createEnemy(
 }
 
 // Nearest zone that is not captured (legacy openZoneFrom, index.html:2162-2170).
-function openZoneFrom(p: Vec2, zones: readonly ZoneState[]): Vec2 | null {
+function openZoneFrom(p: Vec2, zones: readonly { x: number; z: number; captured: boolean }[]): Vec2 | null {
   let best: Vec2 | null = null;
   let bestD = Infinity;
   for (const z of zones) {
@@ -719,12 +983,13 @@ function openZoneFrom(p: Vec2, zones: readonly ZoneState[]): Vec2 | null {
   return best;
 }
 
-function at(o: Vec3, d: Vec3, t: number): Vec3 {
-  return { x: o.x + d.x * t, y: o.y + d.y * t, z: o.z + d.z * t };
+// True when the point is inside the zone radius, measured in XZ.
+function within(p: Vec2, z: Zone): boolean {
+  return (p.x - z.x) ** 2 + (p.z - z.z) ** 2 < z.r * z.r;
 }
 
-function dist3(a: Vec3, b: Vec3): number {
-  return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z);
+function at(o: Vec3, d: Vec3, t: number): Vec3 {
+  return { x: o.x + d.x * t, y: o.y + d.y * t, z: o.z + d.z * t };
 }
 
 function clamp(v: number, lo: number, hi: number): number {

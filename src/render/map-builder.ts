@@ -5,14 +5,18 @@ import type { Aabb, BoxId, CollisionWorld } from '../sim/collision';
 
 export interface MapHandle {
   def: MapDef;
+  // Removes the mesh of a breakable wall once the sim has broken it (the collider is removed by the sim).
+  breakBox(id: BoxId): void;
   zones: { name: string; x: number; z: number }[];
   spawns: { x: number; z: number }[];
   crates: Footprint[];
   // Not in the phase 2 brief. The validator and gameplay code need them, so they are returned too.
   sandbags: Footprint[];
   barrels: { x: number; z: number; r: number; h: number }[];
-  // Ammo pickups. Legacy `crates` array (index.html:1076-1084). They are not colliders.
+  // Resupply crates (legacy `crates` array, index.html:1076-1084). Not colliders. Index i is sim crate i.
   pickups: { x: number; z: number }[];
+  // Hides or shows a resupply crate (legacy k.mesh.visible, hidden during its cooldown).
+  setCrateVisible(index: number, visible: boolean): void;
   dispose(): void;
 }
 
@@ -125,13 +129,15 @@ export function buildMap(def: MapDef, scene: THREE.Scene, world: CollisionWorld,
   ground.receiveShadow = true;
 
   // Registers a collider in the world and in the local list used by the overlap test in areaFree.
-  const collide = (box: Aabb, breakable: boolean): void => {
-    boxIds.push(world.add(box, { breakable }));
+  const collide = (box: Aabb, breakable: boolean): BoxId => {
+    const id = world.add(box, { breakable });
+    boxIds.push(id);
     colliders.push(box);
+    return id;
   };
 
   // A box mesh sitting on min.y (as boxes.ts boxMesh).
-  const addBoxMesh = (box: Aabb, mat: THREE.Material): void => {
+  const addBoxMesh = (box: Aabb, mat: THREE.Material): THREE.Mesh => {
     const sx = box.max.x - box.min.x;
     const sy = box.max.y - box.min.y;
     const sz = box.max.z - box.min.z;
@@ -139,12 +145,16 @@ export function buildMap(def: MapDef, scene: THREE.Scene, world: CollisionWorld,
     mesh.position.set((box.min.x + box.max.x) / 2, box.min.y + sy / 2, (box.min.z + box.max.z) / 2);
     mesh.castShadow = true;
     mesh.receiveShadow = true;
+    return mesh;
   };
 
+  // Mesh of each breakable wall, by collider id, so breakBox can remove it once the sim breaks the wall.
+  const breakMeshes = new Map<BoxId, THREE.Mesh>();
   // Map colliders in data order: boundary, buildings, cover (same order as legacy addBox calls).
   for (const b of def.boxes) {
-    collide(b, b.breakable);
-    addBoxMesh(b, b.breakable ? woodMat : wallMat);
+    const id = collide(b, b.breakable);
+    const mesh = addBoxMesh(b, b.breakable ? woodMat : wallMat);
+    if (b.breakable) breakMeshes.set(id, mesh);
   }
   for (const r of def.roofs) addBoxMesh(r, trimMat);
 
@@ -219,6 +229,7 @@ export function buildMap(def: MapDef, scene: THREE.Scene, world: CollisionWorld,
   // Ammo pickups (index.html:1076-1084). Six, placed on open ground at least 12 m from every zone.
   const nearZone = (x: number, z: number): boolean => def.zones.some((zd) => d2(x, z, zd.x, zd.z) < 144);
   const pickups: { x: number; z: number }[] = [];
+  const pickupMeshes: THREE.Mesh[] = [];
   for (let i = 0; i < 6; i++) {
     let x = 0;
     let z = 0;
@@ -232,6 +243,7 @@ export function buildMap(def: MapDef, scene: THREE.Scene, world: CollisionWorld,
     mesh.position.set(x, PICKUP_H / 2, z);
     mesh.castShadow = true;
     pickups.push({ x, z });
+    pickupMeshes.push(mesh);
   }
 
   // Spawns on a ring (index.html:1086-1090). A fallback point is used only if every ring point is blocked.
@@ -246,12 +258,22 @@ export function buildMap(def: MapDef, scene: THREE.Scene, world: CollisionWorld,
 
   return {
     def,
+    breakBox(id: BoxId): void {
+      const mesh = breakMeshes.get(id);
+      if (mesh === undefined) return;
+      scene.remove(mesh);
+      breakMeshes.delete(id);
+    },
     zones: def.zones.map((z) => ({ name: z.name, x: z.x, z: z.z })),
     spawns,
     crates,
     sandbags,
     barrels,
     pickups,
+    setCrateVisible(index: number, visible: boolean): void {
+      const mesh = pickupMeshes[index];
+      if (mesh !== undefined) mesh.visible = visible;
+    },
     dispose(): void {
       for (const id of boxIds) world.remove(id);
       for (const o of objects) scene.remove(o);

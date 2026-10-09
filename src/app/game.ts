@@ -1,4 +1,30 @@
 /*
+ * Phase 4 integration. Deviations from the legacy game (public/index.html) and decisions for review:
+ *
+ * Phase 4 (match rules):
+ * (e) Zone visuals. Built per zone (render/zones.ts). The point light is High quality only, as the plan says; a
+ *     downgrade rebuilds the zones without it. Colour-blind palette from the saved setting (legacy zoneColor,
+ *     index.html:1026), read each frame.
+ * (f) Debrief. The end screen is minimal: result heading, the formatScoreLine sentence, Redeploy and Main menu.
+ *     Legacy's debrief tiles (index.html:396-412, 2641-2658) are Phase 5. The heading uses 'Mission Failed' from
+ *     index.html:2648 (the Phase 3 toast said 'Mission failed').
+ * (g) Match end. The match stops on the result and waits for the player. Phase 3 restarted it after 4 s. Legacy
+ *     never restarts on its own (it shows the debrief).
+ * (h) Redeploy. Builds a new session: new map layout, fresh state and a fresh renderer. Legacy's redeploy rebuilt
+ *     the map too (index.html:2687-2690, 3041).
+ * (i) Killstreak feedback. Legacy shows announce banners and feed lines. Phase 4 shows toasts with the same wording
+ *     (index.html:2019-2050). The UAV and sentry timers have no HUD yet (Phase 5).
+ * (j) Crates. A used resupply crate hides for its 30 s cooldown (legacy k.mesh.visible, index.html:3230).
+ * (k) Breach. A broken wall's mesh is removed. The collider and the nav grid are updated by the sim.
+ * (l) Spotted hostiles are revealed to the sim (UAV and drone spot values). Nothing is drawn for them yet, as the
+ *     plan says for this phase.
+ * (m) Flashbang. The player's blindness is stored in the sim (flashT). The white overlay is Phase 5.
+ * (n) Groundaim. The sentry and airstrike aim use legacy groundAim (index.html:1303-1310). For a level aim it is
+ *     8 m ahead whatever the distance, so the 6, 4 and 2 m sentry fallbacks only apply to downward aims. Kept as
+ *     legacy.
+ * (o) Score for player kills from gadgets, breach, airstrikes and sentries is the same as for bullets (kill 100,
+ *     headshot +50 for sentry shots). Revive +150 and zone capture +250 follow the spec.
+ *
  * Phase 3 integration. Decisions on the open deviations, for review:
  *
  * (a) Spread. The 'shoot' event carries `spread`, set by ai/hostile.ts with shotSpread(). combat.ts
@@ -19,11 +45,9 @@
  * - Player fire follows legacy: one ray per pellet, spread, recoil, the first hostile before the first wall
  *   takes the hit, damage from hitDamage (falloff and headshot), noise alerts at 40 m (8 m suppressed).
  * - Reload (R) runs on the sim step, as legacy does.
- * - Enemy frag grenades are simulated in sim/world.ts (index.html:1938-1981). Player gadgets are phase 4.
- * - Match end: enemy tickets at 0 win, and running out of reinforcements loses (index.html:2958, 1648).
- *   Zone capture is phase 4 and is not implemented, so zones never capture. After a result the match
- *   restarts after 4 s. The debrief screen is phase 5.
- * - Score, killstreaks and drone or UAV spotting are phase 4. Spotted hostiles are not drawn yet.
+ * - Enemy frag grenades are simulated in sim/world.ts (index.html:1938-1981), and so are the player's gadgets.
+ * - Match end: sim/tickets.ts decides win (enemy tickets 0, or every zone captured) and loss (dead with no
+ *   reinforcements left, index.html:2958, 1648). The end is shown on the end screen, see (f) and (g).
  */
 import * as THREE from 'three';
 import { FixedStep } from '../core/clock';
@@ -33,7 +57,8 @@ import { SIDEARM_ID } from '../content/ids';
 import { getMap } from '../content/maps';
 import { buildMap, buildingRects, type Footprint, type MapHandle } from '../render/map-builder';
 import { WEAPONS } from '../content/weapons';
-import { YAW_PER_PX } from '../content/tuning';
+import { YAW_PER_PX, ZONE_TICKET_COST } from '../content/tuning';
+import type { KillstreakId } from '../content/killstreaks';
 import { ENEMY_DEFS } from '../content/enemies';
 import { DIFF } from '../content/difficulty';
 import { Bindings } from '../input/bindings';
@@ -78,11 +103,28 @@ import {
   type HumanRig,
 } from '../render/humans';
 import { createContextLossHandler } from '../render/context-loss';
+import { buildZoneVisual, type ZoneVisual } from '../render/zones';
+import {
+  breachMarker,
+  droneModel,
+  grenadeMesh,
+  smokeCloud,
+  type BreachMarker,
+  type DroneModel,
+  type GrenadeKind as GrenadeViewKind,
+  type SmokeCloud as SmokeCloudView,
+} from '../render/gadget-models';
+import { turretModel, type TurretModel } from '../render/turret-model';
 import { CollisionWorld } from '../sim/collision';
 import type { Enemy } from '../sim/entities';
+import type { Grenade, SmokeCloud } from '../sim/grenades';
+import { readyLabel } from '../sim/killstreaks';
+import type { MatchResult } from '../sim/match';
+import type { Turret } from '../sim/turret';
 import type { WeaponState } from '../sim/weapons';
 import { SimWorld, type SimEvent, type SimEvents } from '../sim/world';
 import { installDebugHook, type GameState } from './debug-hook';
+import { buildEndScreen } from './end-screen';
 import { DEFAULT_GOVERNOR_OPTIONS, FpsGovernor } from './governor';
 import {
   MUZZLE_TIME,
@@ -109,8 +151,12 @@ const PITCH_LIMIT = 1.45;
 const OPERATOR_COLOUR = 0x2f6b8a;
 // Legacy ORDERS (index.html:473).
 const ORDER_NAMES = ['ATTACK', 'HOLD', 'FOLLOW'] as const;
-// Real time before a finished match restarts (the debrief screen is phase 5).
-const RESTART_DELAY_S = 4;
+// Feed line when a killstreak is used (legacy useKillstreak, index.html:2027-2047).
+const KILLSTREAK_USED_MESSAGE: Readonly<Record<KillstreakId, string>> = {
+  uav: 'UAV online: hostiles revealed',
+  sentry: 'Sentry turret online',
+  airstrike: 'Airstrike inbound',
+};
 // Legacy trackFps samples every 0.5 s (index.html:2962). The governor takes the same window.
 const FPS_WINDOW = DEFAULT_GOVERNOR_OPTIONS.sampleSeconds;
 const FPS_STALL_S = 1;
@@ -165,6 +211,12 @@ function unitDir(a: Vec3, b: Vec3): Vec3 {
   return { x: (b.x - a.x) / len, y: (b.y - a.y) / len, z: (b.z - a.z) / len };
 }
 
+// The mesh kind for a sim grenade: enemy frags have their own colour (gadget-models.ts).
+function grenadeViewKind(g: Grenade): GrenadeViewKind {
+  if (g.kind === 'frag') return g.owner === 'enemy' ? 'enemyFrag' : 'frag';
+  return g.kind;
+}
+
 // Blob shadows need the colliders as boxes. CollisionWorld does not expose them, so rebuild the same list.
 function footprintBox(f: Footprint): BlobBox {
   return {
@@ -207,19 +259,41 @@ interface HumanView {
   phase: number;
 }
 
-// Starts the match loop inside root. Returns a handle for tests and teardown.
-export function startGame(root: HTMLElement, opts: { debug: boolean }): GameHandle {
+// What a session asks of the app shell. Each one ends the session and, except for onMenu, starts a new one.
+interface SessionHooks {
+  // The browser restored the WebGL context: the match is rebuilt (see startGame).
+  onContextRestored: () => void;
+  // The player chose Redeploy on the end screen: a new match on a new map layout.
+  onRedeploy: () => void;
+  // The player chose Main menu on the end screen: the session ends and the shell shows the menu.
+  onMenu: () => void;
+}
+
+// Starts the match loop inside root. Returns a handle for tests and teardown. onMenu is called after the
+// session is torn down, when the player leaves the match.
+export function startGame(root: HTMLElement, opts: { debug: boolean; onMenu?: () => void }): GameHandle {
   let session: Session | null = null;
   let closed = false;
+
+  const restart = (): void => {
+    session?.dispose();
+    session = null;
+    if (!closed) launch();
+  };
 
   // Restore strategy: when the browser restores the WebGL context, the old renderer and every GPU
   // resource are dead. The match is rebuilt in the same root (dispose, then start again). The rebuilt
   // match starts in play, and the score and the player position reset.
   const launch = (): void => {
-    session = runSession(root, opts, () => {
-      session?.dispose();
-      session = null;
-      if (!closed) launch();
+    session = runSession(root, opts, {
+      onContextRestored: restart,
+      onRedeploy: restart,
+      onMenu: () => {
+        closed = true;
+        session?.dispose();
+        session = null;
+        opts.onMenu?.();
+      },
     });
   };
   launch();
@@ -234,7 +308,7 @@ export function startGame(root: HTMLElement, opts: { debug: boolean }): GameHand
   };
 }
 
-function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestored: () => void): Session {
+function runSession(root: HTMLElement, opts: { debug: boolean }, hooks: SessionHooks): Session {
   const settings = loadSettings();
   const bindings = new Bindings(loadBindings());
   const loadout = loadLoadout();
@@ -284,7 +358,7 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
   const difficulty = DIFF[loadout.difficulty];
   const sim = new SimWorld({
     collision: world,
-    zones: zones.map((z) => ({ x: z.x, z: z.z })),
+    zones,
     spawns: mapH.spawns,
     buildings: buildingRects(map),
     rng: mapRng.fork('sim'),
@@ -295,9 +369,20 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
     adsRate: ADS_RATE_REFLEX,
     playerSpawn: SPAWN,
     playerYaw: SPAWN_YAW,
+    gadgets: loadout.gadgets,
+    crates: mapH.pickups,
+    mapName: map.name,
   });
   const P = sim.player;
   const weaponNow = (): WeaponState => sim.weapon;
+
+  // Capture-zone visuals (render/zones.ts). The light is High quality only, so a downgrade rebuilds the zones.
+  let zoneViews: ZoneVisual[] = [];
+  const buildZones = (withLight: boolean): void => {
+    for (const v of zoneViews) v.dispose();
+    zoneViews = sim.zones.map((z) => buildZoneVisual(scene, z, withLight));
+  };
+  buildZones(quality === 'high');
 
   const blobBoxes: BlobBox[] = [
     ...map.boxes,
@@ -371,6 +456,13 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
     };
   });
 
+  // Gadget and killstreak visuals. Each one is created when the sim has the entity and removed when it does not.
+  const smokeViews = new Map<SmokeCloud, SmokeCloudView>();
+  const grenadeViews = new Map<Grenade, THREE.Mesh>();
+  const turretViews = new Map<Turret, TurretModel>();
+  let droneView: DroneModel | null = null;
+  let breachView: BreachMarker | null = null;
+
   const governor = new FpsGovernor();
   let post: PostChain | null = null;
   let viewW = 1;
@@ -391,8 +483,8 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
   let fpsFrames = 0;
   let fpsTime = 0;
   let toastTimer: number | null = null;
-  // Seconds of real time until the finished match restarts, or null while a match runs.
-  let restartIn: number | null = null;
+  // The debrief shown when the match ends. Null while the match runs.
+  let endScreen: HTMLElement | null = null;
 
   const keyboard = new KeyboardInput(() => state === 'play');
   keyboard.attach(window);
@@ -411,8 +503,9 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
     overlay.hidden = false;
   };
 
+  // Only a paused match resumes. A finished match stays on its debrief, even if the pointer locks again.
   const resume = (): void => {
-    if (state === 'play') return;
+    if (state !== 'paused') return;
     state = 'play';
     overlay.hidden = true;
     last = null;
@@ -446,7 +539,7 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
       overlay.hidden = false;
     },
     onRestored: () => {
-      onContextRestored();
+      hooks.onContextRestored();
     },
   });
   contextLoss.attach(canvas);
@@ -545,6 +638,7 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
     if (sun) sun.castShadow = profile.shadows;
     setHemi(false);
     muzzle.visible = profile.muzzleLight;
+    buildZones(false);
     rebuildGrass(profile.grassCount);
     // Materials recompile for the new shadow setting, as legacy does (index.html:720).
     forEachMaterial(scene, (m) => {
@@ -634,6 +728,60 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
           FRAG_BURST.up,
           fxRng,
         );
+        shock.add(ev.at, ev.radius);
+        return;
+      }
+      case 'airstrikeBlast': {
+        particles.emitBurst(
+          ev.at,
+          FRAG_BURST.n,
+          FRAG_BURST.speed,
+          FRAG_BURST.hex,
+          FRAG_BURST.life,
+          FRAG_BURST.up,
+          fxRng,
+        );
+        shock.add(ev.at, ev.radius);
+        return;
+      }
+      case 'breachBlast': {
+        // The sim has removed the collider. The wall's mesh goes with it.
+        mapH.breakBox(ev.box);
+        particles.emitBurst(
+          ev.at,
+          FRAG_BURST.n,
+          FRAG_BURST.speed,
+          FRAG_BURST.hex,
+          FRAG_BURST.life,
+          FRAG_BURST.up,
+          fxRng,
+        );
+        shock.add(ev.at, ev.radius);
+        return;
+      }
+      case 'turretShot': {
+        tracers.add(tracerSegment(ev.from, ev.to));
+        return;
+      }
+      case 'zoneCaptured': {
+        // Legacy feed line (index.html:2575).
+        showToast(`${ev.name} secured · -${String(ZONE_TICKET_COST)} enemy tickets`);
+        return;
+      }
+      case 'killstreakEarned': {
+        showToast(`Killstreak ready: ${readyLabel(ev.id)} [H]`);
+        return;
+      }
+      case 'killstreakUsed': {
+        showToast(KILLSTREAK_USED_MESSAGE[ev.id]);
+        return;
+      }
+      case 'sentryNoGround': {
+        showToast('No clear ground for a sentry here');
+        return;
+      }
+      case 'resupplied': {
+        showToast('Resupplied');
         return;
       }
       case 'playerDown': {
@@ -667,9 +815,8 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
         showToast(`Squad: ${ORDER_NAMES[ev.order]}`);
         return;
       }
-      case 'outcome': {
-        showToast(ev.result === 'won' ? 'Sector secured' : 'Mission failed');
-        restartIn = RESTART_DELAY_S;
+      case 'matchEnd': {
+        finishMatch(ev.result);
         return;
       }
       default:
@@ -677,14 +824,20 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
     }
   };
 
-  const restartMatch = (): void => {
-    sim.restart();
-    restartIn = null;
-    prevX = P.pos.x;
-    prevY = P.pos.y;
-    prevZ = P.pos.z;
-    pendingPressed = new Set<string>();
+  // The match is over. The sim has stopped, input is released and the debrief takes the screen. Redeploy and
+  // Main menu are the only ways on.
+  const finishMatch = (result: MatchResult): void => {
+    state = 'over';
+    keyboard.clear();
+    mouse.clear();
     fireClick = false;
+    overlay.hidden = true;
+    toast.hidden = true;
+    if (document.pointerLockElement !== null) document.exitPointerLock();
+    const debrief = buildEndScreen(result, { onRedeploy: hooks.onRedeploy, onMenu: hooks.onMenu });
+    endScreen = debrief;
+    root.append(debrief);
+    debrief.querySelector<HTMLButtonElement>('button')?.focus();
   };
 
   const simStep = (first: boolean): void => {
@@ -794,6 +947,91 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
     });
   };
 
+  // Places the zone, gadget and killstreak visuals for this frame from the sim lists. A removed entity loses its
+  // visual here, as syncHumans does for hostiles.
+  const syncWorld = (fxDt: number): void => {
+    sim.zones.forEach((z, i) => {
+      const v = zoneViews[i];
+      if (v !== undefined) v.update(z, settings.colorblind);
+    });
+    sim.crates.forEach((c, i) => {
+      mapH.setCrateVisible(i, c.cd <= 0);
+    });
+
+    const liveSmokes = new Set<SmokeCloud>(sim.smokes);
+    for (const [s, v] of smokeViews) {
+      if (!liveSmokes.has(s)) {
+        v.dispose();
+        smokeViews.delete(s);
+      }
+    }
+    for (const s of sim.smokes) {
+      let v = smokeViews.get(s);
+      if (v === undefined) {
+        v = smokeCloud(scene, s.pos, fxRng);
+        smokeViews.set(s, v);
+      }
+      v.setOpacity(s.opacity);
+    }
+
+    const liveNades = new Set<Grenade>(sim.grenades);
+    for (const [g, m] of grenadeViews) {
+      if (!liveNades.has(g)) {
+        scene.remove(m);
+        grenadeViews.delete(g);
+      }
+    }
+    for (const g of sim.grenades) {
+      let m = grenadeViews.get(g);
+      if (m === undefined) {
+        m = grenadeMesh(grenadeViewKind(g));
+        scene.add(m);
+        grenadeViews.set(g, m);
+      }
+      m.position.set(g.pos.x, g.pos.y, g.pos.z);
+    }
+
+    const liveTurrets = new Set<Turret>(sim.turrets);
+    for (const [t, v] of turretViews) {
+      if (!liveTurrets.has(t)) {
+        v.dispose();
+        turretViews.delete(t);
+      }
+    }
+    for (const t of sim.turrets) {
+      let v = turretViews.get(t);
+      if (v === undefined) {
+        v = turretModel();
+        v.group.position.set(t.pos.x, 0, t.pos.z);
+        scene.add(v.group);
+        turretViews.set(t, v);
+      }
+      v.setYaw(t.yaw);
+    }
+
+    if (sim.drone !== null) {
+      if (droneView === null) {
+        droneView = droneModel();
+        scene.add(droneView.group);
+      }
+      droneView.setPos(sim.drone.pos.x, sim.drone.pos.y, sim.drone.pos.z);
+      droneView.spin(fxDt);
+    } else if (droneView !== null) {
+      droneView.dispose();
+      droneView = null;
+    }
+
+    const plant = sim.breach.plant;
+    if (plant !== null) {
+      if (breachView === null) breachView = breachMarker(scene);
+      breachView.setPosition(plant.point);
+      breachView.flash(sim.time);
+    } else if (breachView !== null) {
+      breachView.dispose();
+      breachView = null;
+    }
+  };
+
   const frame = (now: number): void => {
     raf = requestAnimationFrame(frame);
     const frameDt = last === null ? 0 : (now - last) / 1000;
@@ -834,12 +1072,6 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
       mouse.drainLook();
     }
 
-    // A finished match restarts on real time, so the countdown runs while the sim is frozen.
-    if (restartIn !== null) {
-      restartIn -= frameDt;
-      if (restartIn <= 0) restartMatch();
-    }
-
     particles.update(fxDt);
     particleView.sync();
     debris.update(fxDt);
@@ -852,6 +1084,7 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
     shockView.sync();
     holeView.sync();
     syncHumans(fxDt);
+    syncWorld(fxDt);
 
     // Rain only on Substation at High, as legacy (index.html:3156).
     const rainOn = profile.rainOnSubstation && map.id === RAIN_MAP;
@@ -892,6 +1125,9 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
       shots: () => sim.playerShots,
       hits: () => sim.playerHits,
       state: () => state,
+      forceTickets: (n) => {
+        sim.forceEnemyTickets(n);
+      },
     });
   }
 
@@ -917,6 +1153,18 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
       window.removeEventListener('resize', onResize);
       post?.dispose();
       post = null;
+      for (const v of zoneViews) v.dispose();
+      zoneViews = [];
+      for (const v of smokeViews.values()) v.dispose();
+      smokeViews.clear();
+      for (const v of turretViews.values()) v.dispose();
+      turretViews.clear();
+      droneView?.dispose();
+      droneView = null;
+      breachView?.dispose();
+      breachView = null;
+      endScreen?.remove();
+      endScreen = null;
       lamps.dispose();
       mapH.dispose();
       // The remaining meshes and materials are freed by walking the scene. Textures on materials go with them.
@@ -929,6 +1177,8 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
         (o as THREE.Object3D & { geometry?: THREE.BufferGeometry }).geometry?.dispose();
       });
       renderer.dispose();
+      // Frees the WebGL context now. Each redeploy makes a new renderer, and browsers cap live contexts.
+      renderer.forceContextLoss();
       root.replaceChildren();
     },
   };

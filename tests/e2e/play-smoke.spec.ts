@@ -58,3 +58,20 @@ test('substation map loads and plays with no page errors', async ({ page }) => {
   expect(view.state).toBe('play');
   expect(errors).toEqual([]);
 });
+
+test('a match ends with the debrief when enemy tickets reach 0', async ({ page }) => {
+  test.setTimeout(PLAY_TIMEOUT_MS);
+  await page.goto('/next.html?debug');
+  await page.getByRole('button', { name: 'Deploy' }).click();
+  await page.getByRole('button', { name: 'Launch mission' }).click();
+  await expect.poll(async () => (await readView(page)).state).toBe('play');
+
+  // The one debug write: the enemy ticket pool goes to 0, so the next tick ends the match as a win.
+  await page.evaluate(() => {
+    (window as unknown as { __bp: { forceTickets(n: number): void } }).__bp.forceTickets(0);
+  });
+
+  await expect(page.getByRole('heading', { name: 'Sector Secured' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Redeploy' })).toBeVisible();
+  await expect.poll(async () => (await readView(page)).state).toBe('over');
+});

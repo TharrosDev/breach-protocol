@@ -36,7 +36,12 @@ function briefScreen(root: HTMLElement): HTMLElement {
   const launch = el('button', 'primary', 'Launch mission');
   launch.addEventListener('click', () => {
     const debug = new URLSearchParams(location.search).has('debug');
-    startGame(root, { debug });
+    startGame(root, {
+      debug,
+      onMenu: () => {
+        boot(root);
+      },
+    });
   });
   const back = el('button', 'secondary', 'Back');
   back.addEventListener('click', () => {

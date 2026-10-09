@@ -41,7 +41,7 @@ describe('60 s seeded scenario on Compound', () => {
 
     const sim = new SimWorld({
       collision,
-      zones: map.zones.map((z) => ({ x: z.x, z: z.z })),
+      zones: map.zones,
       spawns: map.spawns,
       buildings: buildingRects(map.def),
       rng: createRng(1),
@@ -52,6 +52,9 @@ describe('60 s seeded scenario on Compound', () => {
       adsRate: 17,
       playerSpawn: { x: spawn.x, y: 0, z: spawn.z },
       playerYaw: Math.atan2(-spawn.x, -spawn.z),
+      gadgets: ['frag', 'smoke'],
+      crates: map.pickups,
+      mapName: map.def.name,
     });
 
     const kinds = new Set<string>();
