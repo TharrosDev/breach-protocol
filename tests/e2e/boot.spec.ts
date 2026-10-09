@@ -1,5 +1,9 @@
 import { test, expect } from '@playwright/test';
 
+async function hasWebGL2(page: import('@playwright/test').Page): Promise<boolean> {
+  return page.evaluate(() => document.createElement('canvas').getContext('webgl2') !== null);
+}
+
 test('app boots with no console errors', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (m) => {
@@ -8,7 +12,9 @@ test('app boots with no console errors', async ({ page }) => {
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto('/');
   await expect(page).toHaveTitle('Breach Protocol');
-  await expect(page.getByRole('heading', { name: 'Breach Protocol' })).toBeVisible();
+  const gl = await hasWebGL2(page);
+  const heading = gl ? 'Breach Protocol' : 'WebGL 2 is required';
+  await expect(page.getByRole('heading', { name: heading })).toBeVisible();
   expect(errors).toEqual([]);
 });
 
