@@ -1,12 +1,41 @@
+/*
+ * Phase 3 integration. Decisions on the open deviations, for review:
+ *
+ * (a) Spread. The 'shoot' event carries `spread`, set by ai/hostile.ts with shotSpread(). combat.ts
+ *     resolveEnemyShot applies that value and no other, so the AI's aim and the hit test use one number.
+ *     The player's spread and recoil come from tryFire and the legacy fire code (index.html:1809-1826).
+ * (b) shareIntel. Kept as legacy (index.html:3263-3268). A hostile that spots the player alerts hostiles within
+ *     18 m. It writes state on other hostiles inside stepHostile, so later hostiles in the same tick see it.
+ * (c) Aim points. Player body: feet + eye height x 0.6 (index.html:2226), used for both the aim and the hit
+ *     test. Operator body: 0.95 for the hit sphere (index.html:1857-1866) and for the enemy's aim at an
+ *     operator. Operators aim at enemies at 1.0 (index.html:2426). That is the legacy aim, kept as is.
+ * (d) Path budget. GridNav.findPath spends one token from the budget it is given (grid.ts). Hostile movement
+ *     passes the tick budget straight through. Squad goTo spends its own token and passes an always-granting
+ *     budget to findPath, so each search is charged once.
+ *
+ * Other choices made while integrating:
+ * - Dummy targets from phase 2 are removed. Real hostiles stand in their place, and the debug hits counter
+ *   now counts bullets that hit a hostile.
+ * - Player fire follows legacy: one ray per pellet, spread, recoil, the first hostile before the first wall
+ *   takes the hit, damage from hitDamage (falloff and headshot), noise alerts at 40 m (8 m suppressed).
+ * - Reload (R) runs on the sim step, as legacy does.
+ * - Enemy frag grenades are simulated in sim/world.ts (index.html:1938-1981). Player gadgets are phase 4.
+ * - Match end: enemy tickets at 0 win, and running out of reinforcements loses (index.html:2958, 1648).
+ *   Zone capture is phase 4 and is not implemented, so zones never capture. After a result the match
+ *   restarts after 4 s. The debrief screen is phase 5.
+ * - Score, killstreaks and drone or UAV spotting are phase 4. Spotted hostiles are not drawn yet.
+ */
 import * as THREE from 'three';
 import { FixedStep } from '../core/clock';
 import { createRng } from '../core/rng';
 import type { Vec3 } from '../core/math';
 import { SIDEARM_ID } from '../content/ids';
 import { getMap } from '../content/maps';
-import { buildMap, type Footprint, type MapHandle } from '../render/map-builder';
+import { buildMap, buildingRects, type Footprint, type MapHandle } from '../render/map-builder';
 import { WEAPONS } from '../content/weapons';
 import { YAW_PER_PX } from '../content/tuning';
+import { ENEMY_DEFS } from '../content/enemies';
+import { DIFF } from '../content/difficulty';
 import { Bindings } from '../input/bindings';
 import { buildCommand } from '../input/commands';
 import { KeyboardInput } from '../input/keyboard';
@@ -14,7 +43,6 @@ import { MouseInput } from '../input/mouse';
 import { PointerLock } from '../input/pointer-lock';
 import { loadBindings, loadLoadout, loadSettings, saveSettings } from '../persist/store';
 import type { Quality } from '../persist/schema';
-import { boxMesh } from '../render/boxes';
 import { applyEnvironment, createPostChain, type PostChain } from '../render/post';
 import { profileFor, type QualityProfile } from '../render/quality';
 import { buildGrass } from '../render/grass';
@@ -42,10 +70,18 @@ import {
   stepViewmodel,
 } from '../render/viewmodel';
 import { buildGunModel, type GunModel } from '../render/gun-models';
+import {
+  animateHuman,
+  makeHumanRig,
+  placeHumanEnemy,
+  type HumanPlaceState,
+  type HumanRig,
+} from '../render/humans';
 import { createContextLossHandler } from '../render/context-loss';
-import { CollisionWorld, type BoxId } from '../sim/collision';
-import { createPlayer, stepPlayer, type PlayerState } from '../sim/movement';
-import { makeWeaponState, tickWeapon, tryFire, type WeaponState } from '../sim/weapons';
+import { CollisionWorld } from '../sim/collision';
+import type { Enemy } from '../sim/entities';
+import type { WeaponState } from '../sim/weapons';
+import { SimWorld, type SimEvent, type SimEvents } from '../sim/world';
 import { installDebugHook, type GameState } from './debug-hook';
 import { DEFAULT_GOVERNOR_OPTIONS, FpsGovernor } from './governor';
 import {
@@ -69,17 +105,12 @@ const SPAWN: Vec3 = { x: 0, y: 0, z: 46 };
 const SPAWN_YAW = Math.PI;
 // Pitch clamp from legacy index.html:3015.
 const PITCH_LIMIT = 1.45;
-// Dummy targets: 0.8 m wide, 1.8 m tall, on open ground south of the compound.
-const TARGET_SPOTS: readonly { x: number; z: number }[] = [
-  { x: -12, z: 36 },
-  { x: 0, z: 34 },
-  { x: 12, z: 36 },
-];
-const TARGET_HALF = 0.4;
-const TARGET_H = 1.8;
-const SHOT_RANGE = 500;
-// index.html:1728. Reflex blends ADS at 17 per second; the loadout is fixed to VX with Reflex in phase 1.
-const ADS_RATE_REFLEX = 17;
+// Legacy OPERATOR_COLOR (index.html:531).
+const OPERATOR_COLOUR = 0x2f6b8a;
+// Legacy ORDERS (index.html:473).
+const ORDER_NAMES = ['ATTACK', 'HOLD', 'FOLLOW'] as const;
+// Real time before a finished match restarts (the debrief screen is phase 5).
+const RESTART_DELAY_S = 4;
 // Legacy trackFps samples every 0.5 s (index.html:2962). The governor takes the same window.
 const FPS_WINDOW = DEFAULT_GOVERNOR_OPTIONS.sampleSeconds;
 const FPS_STALL_S = 1;
@@ -95,8 +126,17 @@ const PARTICLE_POOL = 500;
 // Legacy impact (index.html:1378-1381): a bright spark burst and a dust burst.
 const SPARK_BURST = { n: 6, speed: 3.2, hex: 0xffc878, life: 0.3, up: 0 };
 const DUST_BURST = { n: 3, speed: 0.9, hex: 0x9a9488, life: 0.7, up: 0.4 };
-// The rain only runs on the Substation map (legacy index.html:3156), at High.
+// Legacy damageEnemy blood burst (index.html:2525) and grenade blast (index.html:1972).
+const BLOOD_BURST = { n: 10, speed: 2.5, hex: 0x8a1212, life: 0.5, up: 0 };
+const FRAG_BURST = { n: 60, speed: 8, hex: 0xff5a3a, life: 0.8, up: 0 };
+// The rain only runs on the Substation map (legacy index.html:3156).
 const RAIN_MAP = 'substation';
+// Hostile body height used for the blood burst (index.html:2525).
+const BLOOD_Y = 1.2;
+// Crouch distance for a hostile hiding in cover (index.html:2338).
+const HIDING_REACH = 0.9;
+// index.html:1728 (ADS blend rate with Reflex). The loadout is fixed to VX with Reflex, as in phase 1.
+const ADS_RATE_REFLEX = 17;
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v));
@@ -104,6 +144,25 @@ function clamp(v: number, lo: number, hi: number): number {
 
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
+}
+
+// The point `d` metres from `from` toward `to` (clamped to the segment).
+function pointAlong(from: Vec3, to: Vec3, d: number): Vec3 {
+  const len = Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z);
+  if (len <= 0) return { ...from };
+  const k = Math.min(d, len) / len;
+  return {
+    x: from.x + (to.x - from.x) * k,
+    y: from.y + (to.y - from.y) * k,
+    z: from.z + (to.z - from.z) * k,
+  };
+}
+
+// Unit vector from a to b, or (0, 0, 1) when they coincide.
+function unitDir(a: Vec3, b: Vec3): Vec3 {
+  const len = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+  if (len <= 0) return { x: 0, y: 0, z: 1 };
+  return { x: (b.x - a.x) / len, y: (b.y - a.y) / len, z: (b.z - a.z) / len };
 }
 
 // Blob shadows need the colliders as boxes. CollisionWorld does not expose them, so rebuild the same list.
@@ -138,6 +197,16 @@ interface Session {
   dispose(): void;
 }
 
+// Render state for one hostile or operator. The sim owns the positions and states; these are render-only.
+interface HumanView {
+  rig: HumanRig;
+  fall: number;
+  tumble: -1 | 1;
+  kick: number;
+  crouch: number;
+  phase: number;
+}
+
 // Starts the match loop inside root. Returns a handle for tests and teardown.
 export function startGame(root: HTMLElement, opts: { debug: boolean }): GameHandle {
   let session: Session | null = null;
@@ -169,7 +238,6 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
   const settings = loadSettings();
   const bindings = new Bindings(loadBindings());
   const loadout = loadLoadout();
-  const lightweight = loadout.perk === 'lightweight';
   const map = getMap(loadout.map);
 
   root.replaceChildren();
@@ -205,24 +273,31 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
   const sun = findSun(scene);
   if (sun) sun.castShadow = profile.shadows;
 
-  // Dummy targets go in before the lamps and grass, so both keep clear of them.
-  const targetMat = new THREE.MeshStandardMaterial({ color: 0xd9783a, roughness: 0.6 });
-  const targetIds = new Set<BoxId>();
-  for (const spot of TARGET_SPOTS) {
-    const box = {
-      min: { x: spot.x - TARGET_HALF, y: 0, z: spot.z - TARGET_HALF },
-      max: { x: spot.x + TARGET_HALF, y: TARGET_H, z: spot.z + TARGET_HALF },
-    };
-    targetIds.add(world.add(box));
-    scene.add(boxMesh({ ...box, breakable: false }, targetMat));
-  }
-
   const zones = mapH.zones;
-  // Lamps before grass, so the grass avoids the poles (phase 2 build order).
+  // Lamps before grass, so the grass avoids the poles (phase 2 build order). Lamp poles are colliders.
   const lamps = buildLamps(scene, mapRng.fork('lamps'), profile.lampCount, world, zones);
   // The grass stream is forked from the map stream, which is not advanced by fork. A rebuild with another
   // count therefore reuses the same seed, and the first placements match.
   let grass = buildGrass(scene, mapRng.fork('grass'), profile.grassCount, world, zones);
+
+  // The sim is built after the lamps, so its navigation grid sees every collider.
+  const difficulty = DIFF[loadout.difficulty];
+  const sim = new SimWorld({
+    collision: world,
+    zones: zones.map((z) => ({ x: z.x, z: z.z })),
+    spawns: mapH.spawns,
+    buildings: buildingRects(map),
+    rng: mapRng.fork('sim'),
+    difficulty,
+    weapon: WEAPONS.vx,
+    attachment: 'reflex',
+    perk: loadout.perk,
+    adsRate: ADS_RATE_REFLEX,
+    playerSpawn: SPAWN,
+    playerYaw: SPAWN_YAW,
+  });
+  const P = sim.player;
+  const weaponNow = (): WeaponState => sim.weapon;
 
   const blobBoxes: BlobBox[] = [
     ...map.boxes,
@@ -244,10 +319,9 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
   const rain = buildRain(scene, rainField);
 
   // Weapons and the viewmodel. Both models are built; the primary is shown, and the sidearm is hidden.
-  const weapon: WeaponState = makeWeaponState(WEAPONS.vx, 'reflex');
   const gunRoot = new THREE.Group();
   camera.add(gunRoot);
-  const primaryModel = buildGunModel(weapon.def.id);
+  const primaryModel = buildGunModel(WEAPONS.vx.id);
   const sidearmModel = buildGunModel(SIDEARM_ID);
   gunRoot.add(primaryModel.group, sidearmModel.group);
   const muzzle = new THREE.PointLight(MUZZLE_COLOR, 0, MUZZLE_DISTANCE, MUZZLE_DECAY);
@@ -264,7 +338,6 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
   muzzle.visible = profile.muzzleLight;
   const vm = createViewmodel();
 
-  const P: PlayerState = createPlayer(SPAWN, SPAWN_YAW);
   const step = new FixedStep(60);
 
   // Effects. Pools are created here and updated each frame; the sim step only emits.
@@ -279,9 +352,24 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
   const casingView = buildCasingMeshes(scene, casings);
   const tracers = new TracerPool();
   const tracerView = buildTracerMeshes(scene, tracers);
-  // No explosions in the game yet, so debris and shockwaves stay empty. They are wired for the later phases.
+  // Shockwaves are wired for the explosions that come with the gadgets (phase 4). Enemy frags only flash.
   const shock = new ShockwaveField();
   const shockView = buildShockwaveMeshes(scene, shock);
+
+  // Hostile and operator bodies. Enemy rigs are created when the sim spawns an enemy and removed when it drops one.
+  const enemyViews = new Map<Enemy, HumanView>();
+  const operatorViews: HumanView[] = sim.operators.map(() => {
+    const rig = makeHumanRig('operator', OPERATOR_COLOUR);
+    scene.add(rig.group);
+    return {
+      rig,
+      fall: 0,
+      tumble: fxRng.next() < 0.5 ? -1 : 1,
+      kick: 0,
+      crouch: 0,
+      phase: fxRng.range(0, 6),
+    };
+  });
 
   const governor = new FpsGovernor();
   let post: PostChain | null = null;
@@ -289,8 +377,6 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
   let viewH = 1;
 
   let state: GameState = 'play';
-  let shots = 0;
-  let hits = 0;
   // Presses and fire clicks are latched until a sim step consumes them. A frame can run zero steps.
   let pendingPressed = new Set<string>();
   let fireClick = false;
@@ -305,6 +391,8 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
   let fpsFrames = 0;
   let fpsTime = 0;
   let toastTimer: number | null = null;
+  // Seconds of real time until the finished match restarts, or null while a match runs.
+  let restartIn: number | null = null;
 
   const keyboard = new KeyboardInput(() => state === 'play');
   keyboard.attach(window);
@@ -495,58 +583,216 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
     );
   };
 
-  // Ray from the eye along the view direction. A hit on a dummy target counts once.
-  // The same ray feeds the tracer, the impact and the casing eject.
-  const fireShot = (): void => {
-    const origin: Vec3 = { x: P.pos.x, y: P.pos.y + P.eyeHeight, z: P.pos.z };
-    const cp = Math.cos(P.pitch);
-    const dir: Vec3 = { x: Math.sin(P.yaw) * cp, y: Math.sin(P.pitch), z: Math.cos(P.yaw) * cp };
-    shots += 1;
-    muzzleT = MUZZLE_TIME;
-    const hit = world.raycast(origin, dir, SHOT_RANGE);
-    if (hit !== null && targetIds.has(hit.id)) hits += 1;
+  // Turns the sim's events into effects, toasts and the match restart. The sim has already applied them.
+  const handleEvents = (events: SimEvents): void => {
+    for (const ev of events) handleEvent(ev);
+  };
 
-    const at = (t: number): Vec3 => ({
-      x: origin.x + dir.x * t,
-      y: origin.y + dir.y * t,
-      z: origin.z + dir.z * t,
-    });
-    tracers.add(tracerSegment(at(TRACER_START), at(hit?.t ?? SHOT_RANGE)));
-    if (hit !== null) impact(at(hit.t), dir);
-    // Legacy index.html:1828: the shotgun does not eject a casing.
-    if (weapon.def.id !== 'bk') casings.eject(origin, P.yaw, fxRng);
+  const handleEvent = (ev: SimEvent): void => {
+    switch (ev.type) {
+      case 'playerFire': {
+        muzzleT = MUZZLE_TIME;
+        // Legacy index.html:1828: the shotgun does not eject a casing.
+        if (weaponNow().def.id !== 'bk')
+          casings.eject({ x: P.pos.x, y: P.pos.y + P.eyeHeight, z: P.pos.z }, P.yaw, fxRng);
+        return;
+      }
+      case 'bullet': {
+        if (ev.tracer) tracers.add(tracerSegment(pointAlong(ev.from, ev.to, TRACER_START), ev.to));
+        if (ev.wall) impact(ev.to, unitDir(ev.from, ev.to));
+        return;
+      }
+      case 'enemyShot': {
+        if (ev.tracer) tracers.add(tracerSegment(pointAlong(ev.from, ev.to, TRACER_START), ev.to));
+        const v = enemyViews.get(ev.shooter);
+        if (v !== undefined) v.kick = 1;
+        return;
+      }
+      case 'operatorShot': {
+        tracers.add(tracerSegment(pointAlong(ev.from, ev.to, TRACER_START), ev.to));
+        return;
+      }
+      case 'enemyHit': {
+        particles.emitBurst(
+          { x: ev.enemy.pos.x, y: BLOOD_Y, z: ev.enemy.pos.z },
+          BLOOD_BURST.n,
+          BLOOD_BURST.speed,
+          BLOOD_BURST.hex,
+          BLOOD_BURST.life,
+          BLOOD_BURST.up,
+          fxRng,
+        );
+        return;
+      }
+      case 'grenadeBlast': {
+        particles.emitBurst(
+          ev.at,
+          FRAG_BURST.n,
+          FRAG_BURST.speed,
+          FRAG_BURST.hex,
+          FRAG_BURST.life,
+          FRAG_BURST.up,
+          fxRng,
+        );
+        return;
+      }
+      case 'playerDown': {
+        showToast('You are down. Squadmate nearby can revive you.');
+        return;
+      }
+      case 'playerEliminated': {
+        showToast('You were eliminated');
+        return;
+      }
+      case 'playerRevived': {
+        showToast(`${ev.by} revived you`);
+        return;
+      }
+      case 'playerRespawn': {
+        // The respawn is a teleport: no interpolation across the map.
+        prevX = P.pos.x;
+        prevY = P.pos.y;
+        prevZ = P.pos.z;
+        return;
+      }
+      case 'operatorDown': {
+        showToast(`${ev.operator.name} is down`);
+        return;
+      }
+      case 'wave': {
+        showToast(`Wave ${String(ev.wave)} inbound`);
+        return;
+      }
+      case 'orderChanged': {
+        showToast(`Squad: ${ORDER_NAMES[ev.order]}`);
+        return;
+      }
+      case 'outcome': {
+        showToast(ev.result === 'won' ? 'Sector secured' : 'Mission failed');
+        restartIn = RESTART_DELAY_S;
+        return;
+      }
+      default:
+        return;
+    }
+  };
+
+  const restartMatch = (): void => {
+    sim.restart();
+    restartIn = null;
+    prevX = P.pos.x;
+    prevY = P.pos.y;
+    prevZ = P.pos.z;
+    pendingPressed = new Set<string>();
+    fireClick = false;
   };
 
   const simStep = (first: boolean): void => {
     const pressed: ReadonlySet<string> = first ? pendingPressed : new Set<string>();
     if (first) pendingPressed = new Set<string>();
-    const buttons = mouse.buttons();
-    const cmd = buildCommand(keyboard.held(), buttons, { dx: 0, dy: 0 }, pressed, bindings);
+    const cmd = buildCommand(keyboard.held(), mouse.buttons(), { dx: 0, dy: 0 }, pressed, bindings);
 
     prevX = P.pos.x;
     prevY = P.pos.y;
     prevZ = P.pos.z;
-    stepPlayer(P, cmd, world, step.dt, { lightweight, adsRate: ADS_RATE_REFLEX });
-
-    tickWeapon(weapon, step.dt, cmd.buttons.fire, loadout.perk);
     const requested = fireClick;
     fireClick = false;
-    // Legacy index.html:1852: fire when alive, not sprinting, and no sprint cooldown. Auto fires while held.
-    const trigger = requested || (cmd.buttons.fire && weapon.def.auto);
-    if (trigger && P.alive && !P.sprinting && P.sprintCool <= 0) {
-      const result = tryFire(weapon, {
-        ads: cmd.buttons.ads,
-        moving: P.moving,
-        sprinting: P.sprinting,
-        perk: loadout.perk,
-      });
-      if (result !== null) fireShot();
-    }
+    handleEvents(sim.step(cmd, step.dt, requested));
   };
 
   // Reload progress for the viewmodel. Uses the perk-adjusted reload time.
   const currentReload = (): number =>
-    reloadProgress(weapon.reloadLeft, reloadTotal(weapon.def.reload, loadout.perk));
+    reloadProgress(weaponNow().reloadLeft, reloadTotal(weaponNow().def.reload, loadout.perk));
+
+  // Places every hostile and operator rig for this frame. Rigs follow the sim lists: a hostile that the sim
+  // drops loses its rig here.
+  const syncHumans = (fxDt: number): void => {
+    const live = new Set<Enemy>(sim.enemies);
+    for (const [e, v] of enemyViews) {
+      if (!live.has(e)) {
+        scene.remove(v.rig.group);
+        enemyViews.delete(e);
+      }
+    }
+    for (const e of sim.enemies) {
+      let v = enemyViews.get(e);
+      if (v === undefined) {
+        const rig = makeHumanRig(e.kind, ENEMY_DEFS[e.kind].color);
+        scene.add(rig.group);
+        v = {
+          rig,
+          fall: 0,
+          tumble: fxRng.next() < 0.5 ? -1 : 1,
+          kick: 0,
+          crouch: 0,
+          phase: fxRng.range(0, 6),
+        };
+        enemyViews.set(e, v);
+      }
+      const hiding =
+        e.cover !== null &&
+        e.coverT > 0 &&
+        Math.hypot(e.cover.x - e.pos.x, e.cover.z - e.pos.z) < HIDING_REACH;
+      if (e.alive) {
+        v.phase = animateHuman(
+          v.rig,
+          { phase: v.phase, moving: e.moving, aiming: e.engaged && e.unseenT === 0 },
+          fxDt,
+        );
+      }
+      const st: HumanPlaceState = {
+        x: e.pos.x,
+        z: e.pos.z,
+        yaw: e.yaw,
+        kick: v.kick,
+        crouch: v.crouch,
+        hiding,
+        flinchT: e.flinchT,
+        spot: e.spot,
+        phase: v.phase,
+        moving: e.moving,
+        alive: e.alive,
+        fall: v.fall,
+        tumble: v.tumble,
+        time: sim.time,
+        dt: fxDt,
+      };
+      placeHumanEnemy(v.rig, st);
+      v.fall = st.fall;
+      v.kick = st.kick;
+      v.crouch = st.crouch;
+    }
+    sim.operators.forEach((a, i) => {
+      const v = operatorViews[i];
+      if (v === undefined) return;
+      if (a.alive) {
+        // A revived operator stands up again (legacy reviveAlly sets fall to 0).
+        v.fall = 0;
+        v.phase = animateHuman(v.rig, { phase: v.phase, moving: a.moving, aiming: a.fireT > 0 }, fxDt);
+      }
+      const st: HumanPlaceState = {
+        x: a.pos.x,
+        z: a.pos.z,
+        yaw: a.yaw,
+        kick: v.kick,
+        crouch: v.crouch,
+        hiding: false,
+        flinchT: 0,
+        spot: 0,
+        phase: v.phase,
+        moving: a.moving,
+        alive: a.alive,
+        fall: v.fall,
+        tumble: v.tumble,
+        time: sim.time,
+        dt: fxDt,
+      };
+      placeHumanEnemy(v.rig, st);
+      v.fall = st.fall;
+      v.kick = st.kick;
+      v.crouch = st.crouch;
+    });
+  };
 
   const frame = (now: number): void => {
     raf = requestAnimationFrame(frame);
@@ -588,6 +834,12 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
       mouse.drainLook();
     }
 
+    // A finished match restarts on real time, so the countdown runs while the sim is frozen.
+    if (restartIn !== null) {
+      restartIn -= frameDt;
+      if (restartIn <= 0) restartMatch();
+    }
+
     particles.update(fxDt);
     particleView.sync();
     debris.update(fxDt);
@@ -599,6 +851,7 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
     shock.update(fxDt);
     shockView.sync();
     holeView.sync();
+    syncHumans(fxDt);
 
     // Rain only on Substation at High, as legacy (index.html:3156).
     const rainOn = profile.rainOnSubstation && map.id === RAIN_MAP;
@@ -615,7 +868,7 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
     shown.group.position.set(pose.position[0], pose.position[1], pose.position[2]);
     shown.group.rotation.set(pose.rotation[0], pose.rotation[1], pose.rotation[2]);
     shown.mag.position.y = pose.magY;
-    shown.group.visible = viewmodelVisible(P.alive, isScoped(weapon.def.id, P.adsT));
+    shown.group.visible = viewmodelVisible(P.alive, isScoped(weaponNow().def.id, P.adsT));
     muzzle.intensity = muzzleT > 0 ? MUZZLE_INTENSITY : 0;
 
     // Interpolate the rendered position between the last two sim states.
@@ -636,8 +889,8 @@ function runSession(root: HTMLElement, opts: { debug: boolean }, onContextRestor
   if (opts.debug) {
     installDebugHook({
       player: () => P,
-      shots: () => shots,
-      hits: () => hits,
+      shots: () => sim.playerShots,
+      hits: () => sim.playerHits,
       state: () => state,
     });
   }

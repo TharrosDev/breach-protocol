@@ -36,6 +36,11 @@ export class CollisionWorld {
     this.boxes.delete(id);
   }
 
+  // Every registered box, in insertion order. Read-only use: callers must not mutate the boxes.
+  footprints(): Aabb[] {
+    return Array.from(this.boxes.values(), (entry) => entry.box);
+  }
+
   // Pushes p (mutated in place) out of every box footprint to distance r. Two passes, as legacy moveCollide.
   pushOut(p: Vec2, r: number): void {
     for (let pass = 0; pass < 2; pass += 1) {

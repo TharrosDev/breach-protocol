@@ -100,7 +100,8 @@ export interface AiWorld {
 }
 
 export type AiEvent =
-  | { type: 'shoot'; shooter: Enemy; target: Target; aim: Vec3 }
+  // spread is the cone half-angle from shotSpread (hostile.ts). Combat applies this value, not its own.
+  | { type: 'shoot'; shooter: Enemy; target: Target; aim: Vec3; spread: number }
   | { type: 'grenade'; from: Vec3; to: Vec2 }
   | { type: 'spotted'; by: Enemy; target: Target }
   | { type: 'operatorFire'; operator: Operator; enemy: Enemy };
