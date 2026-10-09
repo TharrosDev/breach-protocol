@@ -25,7 +25,8 @@ const IDLE: Command = {
 function makeSim(seed = 1): SimWorld {
   return new SimWorld({
     collision: new CollisionWorld(),
-    zones: [],
+    // One zone far from the fight. A map with no zones would count as every zone captured, and win at once.
+    zones: [{ name: 'Far', x: 500, z: 500 }],
     spawns: [{ x: 0, z: 40 }],
     buildings: [],
     rng: createRng(seed),
@@ -36,6 +37,9 @@ function makeSim(seed = 1): SimWorld {
     adsRate: 17,
     playerSpawn: { x: 0, y: 0, z: 0 },
     playerYaw: 0,
+    gadgets: ['frag', 'smoke'],
+    crates: [],
+    mapName: 'Test',
   });
 }
 
