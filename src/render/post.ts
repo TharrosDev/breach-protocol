@@ -95,6 +95,7 @@ export async function createPostChain(
   renderer: THREE.WebGLRenderer,
   scene: THREE.Scene,
   camera: THREE.Camera,
+  bloomScale = 1,
 ): Promise<PostChain | null> {
   const mods = await loadModules();
   if (mods === null) return null;
@@ -124,6 +125,14 @@ export async function createPostChain(
     setSize: (w, h, pixelRatio) => {
       composer.setPixelRatio(pixelRatio);
       composer.setSize(w, h);
+      // Bloom is a soft glow, so it runs on a smaller base mip than the picture: the blur chain, the most expensive
+      // part of the post stack, costs a quarter as much at 0.5. The composer sized it to the full frame above.
+      if (bloomScale < 1) {
+        bloom.setSize(
+          Math.max(2, Math.round(w * pixelRatio * bloomScale)),
+          Math.max(2, Math.round(h * pixelRatio * bloomScale)),
+        );
+      }
     },
     dispose: () => {
       composer.dispose();

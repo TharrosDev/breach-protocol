@@ -4,7 +4,8 @@ const PORT = '4173';
 
 export default defineConfig({
   testDir: 'tests/e2e',
-  fullyParallel: true,
+  fullyParallel: false,
+  workers: process.env.CI ? 2 : 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : [['list']],
@@ -14,7 +15,7 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   webServer: {
-    command: `npm run build && npm run preview -- --port ${PORT} --strictPort`,
+    command: `npm run build:fast && npm run preview -- --port ${PORT} --strictPort`,
     url: `http://localhost:${PORT}`,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

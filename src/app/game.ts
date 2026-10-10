@@ -179,7 +179,8 @@ import type { Mine } from '../sim/mines';
 import type { WeaponState } from '../sim/weapons';
 import { SimWorld, type SimEvent, type SimEvents } from '../sim/world';
 import { installDebugHook, type GameState } from './debug-hook';
-import { DEFAULT_GOVERNOR_OPTIONS, FpsGovernor } from './governor';
+import { DEFAULT_GOVERNOR_OPTIONS, FpsGovernor, ResolutionScaler } from './governor';
+import { createPerfMonitor, perfRequested, type PerfMonitor } from './perf';
 import {
   HudState,
   KILLSTREAK_USED,
@@ -258,6 +259,12 @@ const OPERATOR_COLOUR = 0x2f6b8a;
 // Legacy trackFps samples every 0.5 s (index.html:2962). The governor takes the same window.
 const FPS_WINDOW = DEFAULT_GOVERNOR_OPTIONS.sampleSeconds;
 const FPS_STALL_S = 1;
+// A frame runs at most this many 1/60 s sim steps. Past that the match runs slow instead of chasing the clock.
+const MAX_SIM_STEPS = 15;
+// The target frame rate when no cap is set, for the resolution scaler.
+const SCALER_TARGET_FPS = 60;
+// No pressed keys: shared by every sim step after the first in a frame.
+const NO_KEYS: ReadonlySet<string> = new Set<string>();
 const DOWNGRADE_MESSAGE = 'Graphics lowered to keep the framerate up';
 const CONTEXT_LOST_MESSAGE = 'Graphics reset. Restoring…';
 const POINTER_REFUSED_MESSAGE = 'Mouse capture was refused. Click the game to capture the mouse.';
@@ -340,6 +347,9 @@ function findHemi(scene: THREE.Scene): THREE.HemisphereLight | null {
 function findSun(scene: THREE.Scene): THREE.DirectionalLight | null {
   return scene.children.find((c): c is THREE.DirectionalLight => c instanceof THREE.DirectionalLight) ?? null;
 }
+
+// Scratch vector for world-to-screen projection, so the HUD's per-frame projections allocate nothing.
+const PROJECT_V = new THREE.Vector3();
 
 function paletteOf(settings: Settings): ColourMode {
   return settings.colorblind ? 'colourblind' : 'normal';
@@ -508,7 +518,10 @@ function runSession(
   muzzle.visible = profile.muzzleLight;
   const vm = createViewmodel();
 
-  const step = new FixedStep(60);
+  const step = new FixedStep(60, 0.25, MAX_SIM_STEPS);
+  const perf: PerfMonitor | null = perfRequested(window.location.search)
+    ? createPerfMonitor(hudRoot, renderer)
+    : null;
 
   // Effects. Pools are created here and updated each frame; the sim step only emits.
   const fxRng = mapRng.fork('fx');
@@ -557,6 +570,12 @@ function runSession(
   let breachView: BreachMarker | null = null;
 
   const governor = new FpsGovernor();
+  // Dynamic resolution: the pixel ratio follows the frame rate in 10 % steps (see governor.ts). ?noscale turns it off.
+  const scaler = new ResolutionScaler();
+  const dynamicRes = !new URLSearchParams(window.location.search).has('noscale');
+  let renderScale = 1;
+  const pixelRatio = (): number => profile.pixelRatioCap * renderScale;
+  let frameNo = 0;
   let post: PostChain | null = null;
   let viewW = 1;
   let viewH = 1;
@@ -577,7 +596,8 @@ function runSession(
   let fpsTime = 0;
   let hudMode: ColourMode = paletteOf(initial.settings);
   let crosshairKey = '';
-  let lastRenderedAt = -Infinity;
+  // Time (rAF clock, ms) the next frame may run at when a frame cap is set.
+  let nextFrameAt = 0;
   // True when the last draw was a held frame of a paused or finished match (see the end of frame()).
   let heldFrame = false;
 
@@ -601,9 +621,9 @@ function runSession(
     mapName: map.name,
     difficultyName: difficulty.name,
   };
+  // The camera's matrices are refreshed once per frame (see frame()), before the HUD reads them.
   const project: WorldProjector = (x, y, z): ScreenPoint => {
-    camera.updateMatrixWorld();
-    const v = new THREE.Vector3(x, y, z).project(camera);
+    const v = PROJECT_V.set(x, y, z).project(camera);
     return {
       x: ((v.x + 1) / 2) * viewW,
       y: ((1 - v.y) / 2) * viewH,
@@ -696,7 +716,7 @@ function runSession(
     renderer.setSize(viewW, viewH);
     camera.aspect = viewW / viewH;
     camera.updateProjectionMatrix();
-    post?.setSize(viewW, viewH, profile.pixelRatioCap);
+    post?.setSize(viewW, viewH, pixelRatio());
   };
   window.addEventListener('resize', onResize);
   onResize();
@@ -725,14 +745,14 @@ function runSession(
       setHemi(false);
       return;
     }
-    const chain = await createPostChain(renderer, scene, camera);
+    const chain = await createPostChain(renderer, scene, camera, profile.bloomScale);
     if (isGone() || !postWanted() || chain === null || post !== null) {
       chain?.dispose();
       if (!isGone()) setHemi(post !== null);
       return;
     }
     post = chain;
-    post.setSize(viewW, viewH, profile.pixelRatioCap);
+    post.setSize(viewW, viewH, pixelRatio());
     await applyEnvironment(renderer, scene);
     if (isGone()) return;
     // A downgrade during the await has already turned post off, so the environment must go too.
@@ -760,8 +780,11 @@ function runSession(
       post = null;
       scene.environment = null;
     }
-    renderer.setPixelRatio(profile.pixelRatioCap);
+    scaler.reset();
+    renderScale = 1;
+    renderer.setPixelRatio(pixelRatio());
     renderer.shadowMap.enabled = profile.shadows;
+    renderer.shadowMap.needsUpdate = true;
     if (sun) sun.castShadow = profile.shadows;
     muzzle.visible = profile.muzzleLight;
     fx.dispose();
@@ -783,6 +806,14 @@ function runSession(
     opts.patchSettings({ quality: 'low' });
     applyQuality('low');
     hudState.feed(DOWNGRADE_MESSAGE, 'warn');
+  };
+
+  // Applies a new render scale from the resolution scaler: the canvas and the post chain follow the pixel ratio.
+  const applyRenderScale = (next: number): void => {
+    if (disposed || next === renderScale) return;
+    renderScale = next;
+    renderer.setPixelRatio(pixelRatio());
+    post?.setSize(viewW, viewH, pixelRatio());
   };
 
   // Legacy mousemove handler (index.html:3012-3016). Applied once per frame, not per fixed step.
@@ -998,7 +1029,7 @@ function runSession(
   };
 
   const simStep = (first: boolean): void => {
-    const pressed: ReadonlySet<string> = first ? pendingPressed : new Set<string>();
+    const pressed: ReadonlySet<string> = first ? pendingPressed : NO_KEYS;
     if (first) pendingPressed = new Set<string>();
     // The pad's stick and held buttons count as keys, and its triggers as the mouse buttons.
     const held = pad.connected
@@ -1028,14 +1059,8 @@ function runSession(
 
   // Places every hostile and operator rig for this frame. Rigs follow the sim lists: a hostile that the sim
   // drops loses its rig here.
+  const liveEnemies = new Set<Enemy>();
   const syncHumans = (fxDt: number): void => {
-    const live = new Set<Enemy>(sim.enemies);
-    for (const [e, v] of enemyViews) {
-      if (!live.has(e)) {
-        scene.remove(v.rig.group);
-        enemyViews.delete(e);
-      }
-    }
     for (const e of sim.enemies) {
       let v = enemyViews.get(e);
       if (v === undefined) {
@@ -1084,9 +1109,22 @@ function runSession(
       v.kick = st.kick;
       v.crouch = st.crouch;
     }
-    sim.operators.forEach((a, i) => {
+    // Every live hostile has a view by now, so more views than hostiles means the sim dropped some. The live set is
+    // only built then (a drop is rare).
+    if (enemyViews.size > sim.enemies.length) {
+      liveEnemies.clear();
+      for (const e of sim.enemies) liveEnemies.add(e);
+      for (const [e, v] of enemyViews) {
+        if (!liveEnemies.has(e)) {
+          scene.remove(v.rig.group);
+          enemyViews.delete(e);
+        }
+      }
+    }
+    for (let i = 0; i < sim.operators.length; i++) {
+      const a = sim.operators[i];
       const v = operatorViews[i];
-      if (v === undefined) return;
+      if (a === undefined || v === undefined) continue;
       if (a.alive) {
         // A revived operator stands up again (legacy reviveAlly sets fall to 0).
         v.fall = 0;
@@ -1113,19 +1151,21 @@ function runSession(
       v.fall = st.fall;
       v.kick = st.kick;
       v.crouch = st.crouch;
-    });
+    }
   };
 
   // Places the zone, gadget and killstreak visuals for this frame from the sim lists. A removed entity loses its
   // visual here, as syncHumans does for hostiles.
   const syncWorld = (fxDt: number): void => {
-    sim.zones.forEach((z, i) => {
+    for (let i = 0; i < sim.zones.length; i++) {
+      const z = sim.zones[i];
       const v = zoneViews[i];
-      if (v !== undefined) v.update(z, liveNow.settings.colorblind);
-    });
-    sim.crates.forEach((c, i) => {
-      mapH.setCrateVisible(i, c.cd <= 0);
-    });
+      if (z !== undefined && v !== undefined) v.update(z, liveNow.settings.colorblind);
+    }
+    for (let i = 0; i < sim.crates.length; i++) {
+      const c = sim.crates[i];
+      if (c !== undefined) mapH.setCrateVisible(i, c.cd <= 0);
+    }
 
     const liveSmokes = new Set<SmokeCloud>(sim.smokes);
     for (const [s, v] of smokeViews) {
@@ -1220,6 +1260,7 @@ function runSession(
 
   const frame = (now: number): void => {
     raf = requestAnimationFrame(guardedFrame);
+    perf?.begin(now);
     const frameDt = last === null ? 0 : (now - last) / 1000;
     last = now;
     liveNow = opts.live();
@@ -1243,6 +1284,9 @@ function runSession(
       fpsFrames = 0;
       fpsTime = 0;
       fpsEl.textContent = `${String(Math.round(fps))} FPS`;
+      const target = s.fpsCap > 0 ? Math.min(s.fpsCap, SCALER_TARGET_FPS) : SCALER_TARGET_FPS;
+      const nextScale = dynamicRes ? scaler.sample(fps, target, inPlay) : null;
+      if (nextScale !== null) applyRenderScale(nextScale);
       if (governor.sample(fps, inPlay, quality) === 'downgrade') downgrade();
     }
     if (fpsEl.hidden !== !s.showFps) fpsEl.hidden = !s.showFps;
@@ -1357,7 +1401,9 @@ function runSession(
       time: fxClock,
     });
 
-    // The HUD reads the sim after the step and the camera update, so its projections match this frame.
+    // The HUD reads the sim after the step and the camera update, so its projections match this frame. The camera's
+    // world matrices are refreshed once here instead of once per projected point.
+    camera.updateMatrixWorld();
     hudState.advance(fxDt);
     // The Tab scoreboard shows while its key is held in play (legacy index.html:2899-2900).
     const scoreboardHeld = inPlay && keyboard.held().has(liveNow.bindings.get('scoreboard'));
@@ -1366,10 +1412,24 @@ function runSession(
     // A paused or finished match draws its last picture once and then holds it. The pause and debrief screens sit on
     // top of that picture, and software GL is slow enough to starve the page while it draws every frame.
     if (!contextLoss.lost && (inPlay || !heldFrame)) {
+      // The sun's shadow map is redrawn every shadowEvery frames (and on the held frame of a pause). Static geometry
+      // does not change, so only moving bodies lag, by one frame at 60 fps.
+      if (profile.shadows && (!inPlay || frameNo % profile.shadowEvery === 0)) {
+        renderer.shadowMap.needsUpdate = true;
+      }
+      frameNo += 1;
       if (post !== null) post.render();
       else renderer.render(scene, camera);
       heldFrame = !inPlay;
     }
+    perf?.end({
+      enemies: sim.enemies.length,
+      enemiesAlive: sim.enemies.reduce((n, e) => (e.alive ? n + 1 : n), 0),
+      operators: sim.operators.length,
+      scale: renderScale,
+      pixelRatio: pixelRatio(),
+      droppedSimSeconds: step.dropped,
+    });
   };
 
   // A fault in one frame must not leave a silent, frozen match. The first fault pauses play and says so. Later faults
@@ -1379,11 +1439,20 @@ function runSession(
     // The frame rate limit skips animation frames until the interval has passed. The sim time is not affected: a
     // skipped frame's time is added to the next one.
     const cap = liveNow.settings.fpsCap;
-    if (cap > 0 && now - lastRenderedAt < 1000 / cap - 1) {
-      raf = requestAnimationFrame(guardedFrame);
-      return;
+    if (cap > 0) {
+      // A schedule, not "time since the last frame": on a 144 Hz display a cap of 60 would otherwise land on every
+      // third refresh (48 fps), because the refresh after 2 ticks is just short of 16.7 ms.
+      if (now < nextFrameAt - 1) {
+        raf = requestAnimationFrame(guardedFrame);
+        return;
+      }
+      const interval = 1000 / cap;
+      nextFrameAt += interval;
+      // After a stall or a change of cap, restart the schedule instead of running frames back to back.
+      if (nextFrameAt < now - interval || nextFrameAt > now + interval) nextFrameAt = now + interval;
+    } else {
+      nextFrameAt = 0;
     }
-    lastRenderedAt = now;
     try {
       frame(now);
     } catch (err) {
@@ -1433,6 +1502,7 @@ function runSession(
       document.removeEventListener('visibilitychange', onVisibility);
       window.removeEventListener('resize', onResize);
       hud.dispose();
+      perf?.dispose();
       post?.dispose();
       post = null;
       for (const v of zoneViews) v.dispose();

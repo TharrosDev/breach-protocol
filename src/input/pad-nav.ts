@@ -61,7 +61,8 @@ export class PadNavigator {
   }
 
   reset(): void {
-    this.held = new Map();
+    // Called every frame while a match is in play, so it allocates only when something was held.
+    if (this.held.size > 0) this.held = new Map();
   }
 }
 

@@ -26,7 +26,7 @@ const TAU = Math.PI * 2;
 
 export class DebrisField {
   private pieces: DebrisPiece[] = [];
-  private readonly capacity: number;
+  readonly capacity: number;
 
   constructor(max = DEFAULT_MAX) {
     if (!Number.isInteger(max) || max < 1) {
@@ -61,6 +61,7 @@ export class DebrisField {
   }
 
   update(dt: number): void {
+    let w = 0;
     for (const d of this.pieces) {
       d.vel.y -= GRAVITY * dt;
       d.pos.x += d.vel.x * dt;
@@ -75,42 +76,46 @@ export class DebrisField {
         d.vel.z *= FRICTION;
       }
       d.life -= dt;
+      if (d.life > 0) this.pieces[w++] = d;
     }
-    this.pieces = this.pieces.filter((d) => d.life > 0);
+    this.pieces.length = w;
   }
 }
 
-// One Mesh per live piece, kept in a grow-only pool. Meshes past the live count are hidden, not destroyed.
+// One InstancedMesh for every piece: a single draw call whatever the count. Only the live pieces are drawn.
 export function buildDebrisMeshes(scene: THREE.Scene, field: DebrisField): { sync(): void; dispose(): void } {
   const geometry = new THREE.BoxGeometry(CUBE_SIZE, CUBE_SIZE, CUBE_SIZE);
   const material = new THREE.MeshStandardMaterial({ color: COLOR, roughness: 0.9 });
-  const meshes: THREE.Mesh[] = [];
+  const mesh = new THREE.InstancedMesh(geometry, material, field.capacity);
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  mesh.count = 0;
+  mesh.frustumCulled = false;
+  mesh.visible = false;
+  scene.add(mesh);
+  const dummy = new THREE.Object3D();
 
   return {
     sync(): void {
       const items = field.items;
-      for (let i = 0; i < items.length; i++) {
+      const n = Math.min(items.length, field.capacity);
+      mesh.count = n;
+      // With no live pieces the mesh is hidden: no draw call and no matrix upload.
+      mesh.visible = n > 0;
+      if (n === 0) return;
+      for (let i = 0; i < n; i++) {
         const d = items[i];
         if (!d) continue;
-        let mesh = meshes[i];
-        if (!mesh) {
-          mesh = new THREE.Mesh(geometry, material);
-          scene.add(mesh);
-          meshes.push(mesh);
-        }
-        mesh.visible = true;
-        mesh.position.set(d.pos.x, d.pos.y, d.pos.z);
-        mesh.rotation.set(d.rot.x, 0, d.rot.z);
-        mesh.scale.setScalar(d.scale);
+        dummy.position.set(d.pos.x, d.pos.y, d.pos.z);
+        dummy.rotation.set(d.rot.x, 0, d.rot.z);
+        dummy.scale.setScalar(d.scale);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(i, dummy.matrix);
       }
-      for (let i = items.length; i < meshes.length; i++) {
-        const hidden = meshes[i];
-        if (hidden) hidden.visible = false;
-      }
+      mesh.instanceMatrix.needsUpdate = true;
     },
     dispose(): void {
-      for (const mesh of meshes) scene.remove(mesh);
-      meshes.length = 0;
+      scene.remove(mesh);
+      mesh.dispose();
       geometry.dispose();
       material.dispose();
     },

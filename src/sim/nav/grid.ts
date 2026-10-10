@@ -24,6 +24,11 @@ const NEIGHBOURS: readonly (readonly [number, number, number])[] = [
   [-1, -1, DIAG_COST],
 ];
 
+const NEIGHBOUR_COUNT = NEIGHBOURS.length;
+const NB_DX = Int8Array.from(NEIGHBOURS, (n) => n[0]);
+const NB_DZ = Int8Array.from(NEIGHBOURS, (n) => n[1]);
+const NB_COST = Float64Array.from(NEIGHBOURS, (n) => n[2]);
+
 function clampCell(v: number): number {
   return Math.min(Math.max(v, 0), GN - 1);
 }
@@ -33,30 +38,32 @@ export function cellOf(x: number, z: number): number {
   return clampCell(Math.floor(z + GO)) * GN + clampCell(Math.floor(x + GO));
 }
 
-interface HeapItem {
-  readonly key: number;
-  readonly val: number;
-}
-
-// Binary min-heap keyed on the A* priority (legacy heapPush/heapPop, index.html:914-945).
+// Binary min-heap keyed on the A* priority (legacy heapPush/heapPop, index.html:914-945). Parallel typed arrays, so a
+// push allocates nothing. Same comparisons as the object version, so equal keys pop in the same order.
 class MinHeap {
-  private readonly items: HeapItem[] = [];
+  private keys = new Float64Array(1024);
+  private vals = new Int32Array(1024);
+  private n = 0;
 
   get size(): number {
-    return this.items.length;
+    return this.n;
   }
 
   clear(): void {
-    this.items.length = 0;
+    this.n = 0;
   }
 
   push(key: number, val: number): void {
-    const items = this.items;
-    items.push({ key, val });
-    let i = items.length - 1;
+    if (this.n === this.keys.length) this.grow();
+    const keys = this.keys;
+    const vals = this.vals;
+    let i = this.n;
+    this.n += 1;
+    keys[i] = key;
+    vals[i] = val;
     while (i > 0) {
-      const p = Math.floor((i - 1) / 2);
-      if (this.keyAt(p) <= this.keyAt(i)) break;
+      const p = (i - 1) >> 1;
+      if ((keys[p] ?? 0) <= (keys[i] ?? 0)) break;
       this.swap(p, i);
       i = p;
     }
@@ -64,42 +71,49 @@ class MinHeap {
 
   // Removes and returns the smallest value, or undefined when empty.
   pop(): number | undefined {
-    const items = this.items;
-    const top = items[0];
-    const last = items.pop();
-    if (top === undefined || last === undefined) return undefined;
-    if (items.length > 0) {
-      items[0] = last;
+    if (this.n === 0) return undefined;
+    const top = this.vals[0];
+    this.n -= 1;
+    if (this.n > 0) {
+      this.keys[0] = this.keys[this.n] ?? 0;
+      this.vals[0] = this.vals[this.n] ?? 0;
       this.siftDown();
     }
-    return top.val;
+    return top;
   }
 
   private siftDown(): void {
-    const n = this.items.length;
+    const n = this.n;
+    const keys = this.keys;
     let i = 0;
     for (;;) {
       const l = 2 * i + 1;
       const r = l + 1;
       let m = i;
-      if (l < n && this.keyAt(l) < this.keyAt(m)) m = l;
-      if (r < n && this.keyAt(r) < this.keyAt(m)) m = r;
+      if (l < n && (keys[l] ?? 0) < (keys[m] ?? 0)) m = l;
+      if (r < n && (keys[r] ?? 0) < (keys[m] ?? 0)) m = r;
       if (m === i) return;
       this.swap(m, i);
       i = m;
     }
   }
 
-  private keyAt(i: number): number {
-    return this.items[i]?.key ?? Infinity;
+  private grow(): void {
+    const keys = new Float64Array(this.keys.length * 2);
+    keys.set(this.keys);
+    const vals = new Int32Array(this.vals.length * 2);
+    vals.set(this.vals);
+    this.keys = keys;
+    this.vals = vals;
   }
 
   private swap(a: number, b: number): void {
-    const x = this.items[a];
-    const y = this.items[b];
-    if (x === undefined || y === undefined) return;
-    this.items[a] = y;
-    this.items[b] = x;
+    const k = this.keys[a] ?? 0;
+    const v = this.vals[a] ?? 0;
+    this.keys[a] = this.keys[b] ?? 0;
+    this.vals[a] = this.vals[b] ?? 0;
+    this.keys[b] = k;
+    this.vals[b] = v;
   }
 }
 
@@ -200,8 +214,12 @@ export class GridNav implements NavGrid {
     const id = this.searchId;
 
     const tcx = t % GN;
-    const tcz = Math.floor(t / GN);
-    const heuristic = (c: number): number => Math.hypot((c % GN) - tcx, Math.floor(c / GN) - tcz);
+    const tcz = (t / GN) | 0;
+    const heuristic = (c: number): number => {
+      const hx = (c % GN) - tcx;
+      const hz = ((c / GN) | 0) - tcz;
+      return Math.sqrt(hx * hx + hz * hz);
+    };
 
     heap.clear();
     stamp[s] = id;
@@ -221,9 +239,12 @@ export class GridNav implements NavGrid {
       }
 
       const cx = cur % GN;
-      const cz = Math.floor(cur / GN);
+      const cz = (cur / GN) | 0;
       const cg = g[cur] ?? 0;
-      for (const [dx, dz, cost] of NEIGHBOURS) {
+      for (let k = 0; k < NEIGHBOUR_COUNT; k += 1) {
+        const dx = NB_DX[k] ?? 0;
+        const dz = NB_DZ[k] ?? 0;
+        const cost = NB_COST[k] ?? 1;
         const nx = cx + dx;
         const nz = cz + dz;
         if (nx < 0 || nz < 0 || nx >= GN || nz >= GN) continue;

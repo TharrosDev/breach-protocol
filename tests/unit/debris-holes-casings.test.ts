@@ -130,30 +130,35 @@ describe('CasingField', () => {
 });
 
 describe('debris and hole meshes', () => {
-  it('reuses pooled debris meshes, hides the spares and disposes cleanly', () => {
+  it('draws the live debris pieces as one instanced mesh, hides it when empty and disposes cleanly', () => {
     const scene = new THREE.Scene();
     const field = new DebrisField();
     const handle = buildDebrisMeshes(scene, field);
+    const mesh = scene.children[0] as THREE.InstancedMesh;
+    expect(scene.children.length).toBe(1);
+    expect(mesh).toBeInstanceOf(THREE.InstancedMesh);
+    expect(mesh.visible).toBe(false);
 
     field.burst({ x: 0, y: 1, z: 0 }, 3, constantRng(0.5));
     handle.sync();
-    expect(scene.children.length).toBe(3);
+    expect(mesh.visible).toBe(true);
+    expect(mesh.count).toBe(3);
 
     field.update(2.5);
     handle.sync();
-    expect(scene.children.every((m) => !m.visible)).toBe(true);
-    expect(scene.children.length).toBe(3);
+    expect(mesh.visible).toBe(false);
+    expect(mesh.count).toBe(0);
 
     field.burst({ x: 0, y: 1, z: 0 }, 1, constantRng(0.5));
     handle.sync();
-    expect(scene.children.filter((m) => m.visible).length).toBe(1);
-    expect(scene.children.length).toBe(3);
+    expect(mesh.count).toBe(1);
+    expect(scene.children.length).toBe(1);
 
     handle.dispose();
     expect(scene.children.length).toBe(0);
   });
 
-  it('creates one hole mesh per decal, drops the oldest past the cap, and builds the texture once', () => {
+  it('draws every hole decal in one instanced mesh, drops the oldest past the cap, and builds the texture once', () => {
     const scene = new THREE.Scene();
     const field = new HoleField();
     let textures = 0;
@@ -170,7 +175,12 @@ describe('debris and hole meshes', () => {
       field.add({ x: i, y: 0, z: 0 }, { x: 0, y: 1, z: 0 });
     }
     handle.sync();
-    expect(scene.children.length).toBe(80);
+    expect(scene.children.length).toBe(1);
+    expect((scene.children[0] as THREE.InstancedMesh).count).toBe(80);
+    expect(textures).toBe(1);
+
+    // No new hole: no rebuild and no second texture.
+    handle.sync();
     expect(textures).toBe(1);
 
     handle.dispose();

@@ -37,6 +37,10 @@ export class ParticlePool {
   private readonly capacity: number;
   private next = 0;
   private live = 0;
+  // True when the arrays changed since the view last uploaded them. A pool with no live particles stays false, so an
+  // idle pool costs no loop and no GPU upload.
+  dirty = false;
+  private settling = false;
 
   constructor(max = 500) {
     if (!Number.isInteger(max) || max < 1) {
@@ -63,6 +67,7 @@ export class ParticlePool {
   emitBurst(p: Vec3, n: number, speed: number, hex: number, life: number, up = 0, rng?: Rng): void {
     if (!(life > 0)) return;
     const r = rng ?? fallbackRng;
+    this.dirty = true;
     const cr = srgbToLinear(((hex >> 16) & 0xff) / 255);
     const cg = srgbToLinear(((hex >> 8) & 0xff) / 255);
     const cb = srgbToLinear((hex & 0xff) / 255);
@@ -97,6 +102,14 @@ export class ParticlePool {
   }
 
   update(dt: number): void {
+    if (this.live === 0) {
+      // One more upload after the last particle died, so the parked positions reach the GPU.
+      this.dirty = this.settling;
+      this.settling = false;
+      return;
+    }
+    this.dirty = true;
+    this.settling = true;
     for (let i = 0; i < this.capacity; i++) {
       const life = read(this.life, i);
       if (life <= 0) continue;
@@ -181,6 +194,7 @@ export function buildParticles(
   return {
     object,
     sync(): void {
+      if (!pool.dirty) return;
       position.needsUpdate = true;
       color.needsUpdate = true;
     },

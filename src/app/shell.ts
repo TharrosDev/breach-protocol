@@ -35,7 +35,7 @@ import {
   type SettingsChange,
 } from '../ui/screens';
 import type { FocusLike } from '../ui/screens/model';
-import { startGame, type GameHandle, type LiveSettings } from './game';
+import type { GameHandle, LiveSettings } from './game';
 import { AppSound } from './sound';
 
 // A screen is built before its element exists, so its focus scope is bound right after the factory returns. Until
@@ -63,6 +63,18 @@ function deferredFocus(): { focus: FocusLike; bind(element: HTMLElement): void }
       });
     },
   };
+}
+
+// The match code (the renderer, Three.js and every effect) is a separate chunk, loaded the first time it is needed and
+// fetched in the background once the menu is up. The menu itself needs none of it, so the page is interactive sooner.
+let gameModule: Promise<typeof import('./game')> | null = null;
+function loadGame(): Promise<typeof import('./game')> {
+  gameModule ??= import('./game').catch((err: unknown) => {
+    // Let the next launch try again.
+    gameModule = null;
+    throw err;
+  });
+  return gameModule;
 }
 
 function liveFrom(settings: Settings, bindings: Bindings): LiveSettings {
@@ -270,27 +282,42 @@ export function mountShell(root: HTMLElement): void {
     debrief.present(result, report);
   }
 
+  // Bumped by every launch and abort, so a slow chunk load cannot start a match the player has already left.
+  let launchId = 0;
+
   function startMatch(): void {
     game?.dispose();
     game = null;
     showScreen(null);
-    game = startGame(stage, {
-      debug: new URLSearchParams(location.search).has('debug'),
-      loadout: currentLoadout(),
-      live: () => live,
-      patchSettings,
-      sound,
-      onPause: () => {
-        openPause();
-      },
-      onResume: () => {
-        showScreen(null);
-      },
-      onOver: onMatchOver,
-    });
+    launchId += 1;
+    const mine = launchId;
+    const loadout = currentLoadout();
+    loadGame()
+      .then(({ startGame }) => {
+        if (mine !== launchId) return;
+        game = startGame(stage, {
+          debug: new URLSearchParams(location.search).has('debug'),
+          loadout,
+          live: () => live,
+          patchSettings,
+          sound,
+          onPause: () => {
+            openPause();
+          },
+          onResume: () => {
+            showScreen(null);
+          },
+          onOver: onMatchOver,
+        });
+      })
+      .catch((err: unknown) => {
+        console.error('The match could not start.', err);
+        if (mine === launchId) openMenu();
+      });
   }
 
   function abortMatch(): void {
+    launchId += 1;
     game?.dispose();
     game = null;
     openMenu();
@@ -308,4 +335,14 @@ export function mountShell(root: HTMLElement): void {
   startPadNav(window, () => game === null || game.state() !== 'play');
 
   openMenu();
+
+  // Fetch the match chunk while the player reads the menu, so Launch does not wait for it. A failure here is ignored:
+  // Launch tries again and reports it.
+  const prefetch = (): void => {
+    void loadGame().catch(() => undefined);
+  };
+  // requestIdleCallback is missing in some browsers (Safari), hence the check on the window object.
+  const idleHost: { requestIdleCallback?: (cb: () => void) => number } = window;
+  if (idleHost.requestIdleCallback !== undefined) idleHost.requestIdleCallback(prefetch);
+  else window.setTimeout(prefetch, 600);
 }

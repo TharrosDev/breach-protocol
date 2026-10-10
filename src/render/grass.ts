@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Rng } from '../core/rng';
 import type { CollisionWorld } from '../sim/collision';
+import { freezeStatic } from './texture-cache';
 
 export interface GrassPlacement {
   x: number;
@@ -80,6 +81,7 @@ export function buildGrass(
   });
   im.count = placements.length;
   im.instanceMatrix.needsUpdate = true;
+  freezeStatic(im);
   scene.add(im);
   return im;
 }

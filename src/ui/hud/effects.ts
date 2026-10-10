@@ -13,6 +13,7 @@ import {
 
 // Last value written per element and property. Browsers rewrite values such as 50.00% as 50%, so comparing against
 // the element's own style would miss unchanged values.
+// Keyed by the property name alone: only setStyle uses it, so no per-call key string is built.
 const written = new WeakMap<Element, Map<string, string>>();
 
 function changed(el: Element, key: string, value: string): boolean {
@@ -31,7 +32,7 @@ export function setText(el: Element, value: string): void {
 }
 
 export function setStyle(el: HTMLElement, prop: string, value: string): void {
-  if (changed(el, `style:${prop}`, value)) el.style.setProperty(prop, value);
+  if (changed(el, prop, value)) el.style.setProperty(prop, value);
 }
 
 export function setAttr(el: Element, name: string, value: string): void {

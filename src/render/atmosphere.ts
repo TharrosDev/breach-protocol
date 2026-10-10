@@ -9,6 +9,7 @@ import type { Rng } from '../core/rng';
 import type { CollisionWorld } from '../sim/collision';
 import { makeSoftDotTexture } from './fx-assets';
 import type { QualityProfile } from './quality';
+import { freezeStatic } from './texture-cache';
 
 export interface TimeOfDay {
   // Sun position and intensity.
@@ -139,13 +140,16 @@ export function buildAtmosphere(
     vertexShader: SKY_VERT,
     fragmentShader: SKY_FRAG,
     side: THREE.BackSide,
+    // The sky is drawn after the opaque scene, at the far plane (the vertex shader sets z = w), with the depth test
+    // on. Pixels covered by walls and ground fail the test before the fragment shader runs, so the cloud and star
+    // noise is only paid for where the sky is visible. It used to draw first with no depth test, shading every pixel.
     depthWrite: false,
-    depthTest: false,
+    depthTest: true,
     fog: false,
   });
   const skyGeo = new THREE.SphereGeometry(300, 24, 16);
   const sky = new THREE.Mesh(skyGeo, skyMat);
-  sky.renderOrder = -1000;
+  sky.renderOrder = 1000;
   sky.frustumCulled = false;
   scene.add(sky);
   disposers.push(() => {
@@ -204,6 +208,8 @@ export function buildAtmosphere(
     stones.instanceMatrix.needsUpdate = true;
     patches.instanceMatrix.needsUpdate = true;
     stones.receiveShadow = true;
+    freezeStatic(stones);
+    freezeStatic(patches);
     scene.add(stones, patches);
     disposers.push(() => {
       scene.remove(stones, patches);

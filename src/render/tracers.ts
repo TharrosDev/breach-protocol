@@ -42,90 +42,117 @@ export class TracerPool {
   }
 
   update(dt: number): void {
-    for (const t of this.tracers) t.life -= dt;
-    this.tracers = this.tracers.filter((t) => t.life > 0);
+    // In-place compaction: no new array per frame.
+    let w = 0;
+    for (const t of this.tracers) {
+      t.life -= dt;
+      if (t.life > 0) this.tracers[w++] = t;
+    }
+    this.tracers.length = w;
   }
 }
 
-// One Line per live tracer. Each line is removed and disposed on expiry.
+interface TracerSlot {
+  line: THREE.Line;
+  position: THREE.BufferAttribute;
+  glow: THREE.Mesh | null;
+}
+
+// One Line per live tracer, taken from a pool of slots. A slot keeps its geometry (two vertices, rewritten in place)
+// and its materials, so a shot allocates no GPU resources after the pool has warmed up. A slot is in the scene only
+// while its tracer is alive.
 export function buildTracerMeshes(
   scene: THREE.Scene,
   pool: TracerPool,
   glow = false,
 ): { sync(): void; dispose(): void } {
-  const lines = new Map<object, THREE.Line>();
-  const glows = new Map<object, THREE.Mesh>();
+  const active = new Map<object, TracerSlot>();
+  const free: TracerSlot[] = [];
+  const all: TracerSlot[] = [];
   const glowGeo = new THREE.BoxGeometry(1, 1, 1);
   glowGeo.translate(0, 0, -0.5);
+  const a = new THREE.Vector3();
+  const b = new THREE.Vector3();
 
-  const removeLine = (line: THREE.Line): void => {
-    scene.remove(line);
-    line.geometry.dispose();
-    (line.material as THREE.Material).dispose();
+  const makeSlot = (): TracerSlot => {
+    const position = new THREE.BufferAttribute(new Float32Array(6), 3).setUsage(THREE.DynamicDrawUsage);
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', position);
+    // The segment moves between uses, so the bounds are refreshed on each use.
+    const material = new THREE.LineBasicMaterial({
+      color: TRACER_COLOR,
+      transparent: true,
+      opacity: TRACER_OPACITY,
+    });
+    const line = new THREE.Line(geometry, material);
+    line.frustumCulled = false;
+    let gm: THREE.Mesh | null = null;
+    if (glow) {
+      gm = new THREE.Mesh(
+        glowGeo,
+        new THREE.MeshBasicMaterial({
+          color: TRACER_COLOR,
+          transparent: true,
+          opacity: 0.5,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          fog: false,
+        }),
+      );
+      gm.frustumCulled = false;
+    }
+    const slot = { line, position, glow: gm };
+    all.push(slot);
+    return slot;
+  };
+
+  const release = (tracer: object, slot: TracerSlot): void => {
+    scene.remove(slot.line);
+    if (slot.glow) scene.remove(slot.glow);
+    active.delete(tracer);
+    free.push(slot);
   };
 
   return {
     sync(): void {
-      const live = new Set<object>(pool.items);
-      for (const [tracer, line] of lines) {
-        if (!live.has(tracer)) {
-          removeLine(line);
-          lines.delete(tracer);
-          const gm = glows.get(tracer);
-          if (gm) {
-            scene.remove(gm);
-            (gm.material as THREE.Material).dispose();
-            glows.delete(tracer);
-          }
-        }
+      for (const [tracer, slot] of active) {
+        if ((tracer as Tracer).life <= 0) release(tracer, slot);
       }
       for (const tracer of pool.items) {
-        const gm0 = glows.get(tracer);
-        if (gm0)
-          (gm0.material as THREE.MeshBasicMaterial).opacity = 0.5 * Math.min(1, tracer.life / TRACER_LIFE);
-        if (lines.has(tracer)) continue;
-        const geometry = new THREE.BufferGeometry().setFromPoints([
-          new THREE.Vector3(tracer.start.x, tracer.start.y, tracer.start.z),
-          new THREE.Vector3(tracer.end.x, tracer.end.y, tracer.end.z),
-        ]);
-        const material = new THREE.LineBasicMaterial({
-          color: tracer.color,
-          transparent: true,
-          opacity: TRACER_OPACITY,
-        });
-        const line = new THREE.Line(geometry, material);
-        scene.add(line);
-        lines.set(tracer, line);
-        if (glow) {
-          const a = new THREE.Vector3(tracer.start.x, tracer.start.y, tracer.start.z);
-          const b = new THREE.Vector3(tracer.end.x, tracer.end.y, tracer.end.z);
-          const gm = new THREE.Mesh(
-            glowGeo,
-            new THREE.MeshBasicMaterial({
-              color: tracer.color,
-              transparent: true,
-              opacity: 0.5,
-              blending: THREE.AdditiveBlending,
-              depthWrite: false,
-              fog: false,
-            }),
-          );
-          gm.position.copy(a);
-          gm.lookAt(b);
-          gm.scale.set(0.035, 0.035, a.distanceTo(b));
-          scene.add(gm);
-          glows.set(tracer, gm);
+        let slot = active.get(tracer);
+        if (slot === undefined) {
+          slot = free.pop() ?? makeSlot();
+          active.set(tracer, slot);
+          slot.position.setXYZ(0, tracer.start.x, tracer.start.y, tracer.start.z);
+          slot.position.setXYZ(1, tracer.end.x, tracer.end.y, tracer.end.z);
+          slot.position.needsUpdate = true;
+          (slot.line.material as THREE.LineBasicMaterial).color.setHex(tracer.color);
+          scene.add(slot.line);
+          if (slot.glow) {
+            a.set(tracer.start.x, tracer.start.y, tracer.start.z);
+            b.set(tracer.end.x, tracer.end.y, tracer.end.z);
+            (slot.glow.material as THREE.MeshBasicMaterial).color.setHex(tracer.color);
+            slot.glow.position.copy(a);
+            slot.glow.lookAt(b);
+            slot.glow.scale.set(0.035, 0.035, a.distanceTo(b));
+            scene.add(slot.glow);
+          }
+        }
+        if (slot.glow) {
+          (slot.glow.material as THREE.MeshBasicMaterial).opacity =
+            0.5 * Math.min(1, tracer.life / TRACER_LIFE);
         }
       }
     },
     dispose(): void {
-      for (const line of lines.values()) removeLine(line);
-      lines.clear();
-      for (const gm of glows.values()) {
-        scene.remove(gm);
-        (gm.material as THREE.Material).dispose();
+      for (const [tracer, slot] of [...active]) release(tracer, slot);
+      for (const slot of all) {
+        slot.line.geometry.dispose();
+        (slot.line.material as THREE.Material).dispose();
+        if (slot.glow) (slot.glow.material as THREE.Material).dispose();
       }
-      glows.clear();
+      all.length = 0;
+      free.length = 0;
       glowGeo.dispose();
     },
   };

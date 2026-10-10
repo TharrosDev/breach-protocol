@@ -117,6 +117,8 @@ const COMPASS_LABELS: readonly { readonly text: string; readonly angle: number }
 ];
 // Legacy intro hint timing (index.html:3402-3417): the first hint now, the next two after 6 s and 12 s.
 const HINT_FIRST_MS = 5500;
+// The slow HUD panels refresh this often (ms).
+const SLOW_INTERVAL_MS = 66;
 const HINT_SECOND_AT_MS = 6000;
 const HINT_SECOND_MS = 5000;
 const HINT_THIRD_AT_MS = 12000;
@@ -277,7 +279,9 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
   let clock = 0;
   let hitKind: HitKind = 'hit';
   let ticketShown = Number.NaN;
-  let lastStep = 0;
+  let slowAcc = 0;
+  let lastSlowMs = -Infinity;
+  let forceSlow = true;
   let hitTimer = 0;
   let announceKey: string | null = null;
   let announceTimer = 0;
@@ -337,7 +341,7 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
     });
   }
 
-  function updateTopBar(view: HudView): void {
+  function updateTopBar(view: HudView, elapsed: number): void {
     zoneCards.forEach((z, i) => {
       const state = view.zones[i];
       setHidden(z.card, state === undefined);
@@ -349,7 +353,7 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
     });
     setStyle(etkFill, 'transform', scaleX(ticketFraction(view.tickets, view.ticketsStart)));
     // The number eases toward the real value, so a capture that removes tickets reads as a drain.
-    ticketShown += (view.tickets - ticketShown) * Math.min(1, lastStep * 6);
+    ticketShown += (view.tickets - ticketShown) * Math.min(1, elapsed * 6);
     if (Math.abs(view.tickets - ticketShown) < 0.5) ticketShown = view.tickets;
     setText(etkNum, String(Math.round(ticketShown)));
     setFlag(etk, 'drain', Math.round(ticketShown) !== view.tickets);
@@ -502,47 +506,57 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
   function update(view: HudView, dt: number, extras: HudExtras = {}): void {
     if (disposed) return;
     const step = Number.isFinite(dt) && dt > 0 ? dt : 0;
-    lastStep = step;
     if (Number.isNaN(ticketShown)) ticketShown = view.tickets;
     clock += step;
     const operators = extras.operators ?? [];
 
-    setStyle(root, '--hud-gap', `${gapFromSpread(extras.spread ?? 0).toFixed(1)}px`);
+    // On the crosshair, not the root: a custom property that changes every frame on the root restyles the whole HUD.
+    setStyle(cross, '--hud-gap', `${gapFromSpread(extras.spread ?? 0).toFixed(1)}px`);
     setStyle(whiteout, 'opacity', clamp01(view.whiteout).toFixed(3));
     setStyle(vignette, 'opacity', (clamp01(view.hurt) * VIGNETTE_MAX_OPACITY).toFixed(3));
 
-    setText(scoreEl, `Score ${String(view.score)}`);
-    setText(hostilesEl, `Hostiles ${String(view.hostilesAlive)}`);
-    setText(reinforcementsEl, `Reinforcements ${String(view.reinforcements)}`);
-    setText(operatorsEl, `Operators ${String(view.operatorsAlive)}/${String(view.operatorsTotal)}`);
-    setText(
-      orderEl,
-      `Squad: ${view.squadOrder}${extras.orderKey === undefined ? '' : ` [${extras.orderKey}]`}`,
-    );
-
-    updateSquad(operators.slice(0, SQUAD_CARDS));
+    // Panels whose numbers change a few times a second (score, counts, squad, tickets, gadgets, feed) are refreshed
+    // at 15 Hz. The crosshair, health, ammo, hit marker, compass and the projected labels stay on every frame.
+    slowAcc += step;
+    const nowMs = performance.now();
+    const runSlow = nowMs - lastSlowMs >= SLOW_INTERVAL_MS || forceSlow;
+    if (runSlow) {
+      lastSlowMs = nowMs;
+      forceSlow = false;
+      setText(scoreEl, `Score ${String(view.score)}`);
+      setText(hostilesEl, `Hostiles ${String(view.hostilesAlive)}`);
+      setText(reinforcementsEl, `Reinforcements ${String(view.reinforcements)}`);
+      setText(operatorsEl, `Operators ${String(view.operatorsAlive)}/${String(view.operatorsTotal)}`);
+      setText(
+        orderEl,
+        `Squad: ${view.squadOrder}${extras.orderKey === undefined ? '' : ` [${extras.orderKey}]`}`,
+      );
+      updateSquad(operators.slice(0, SQUAD_CARDS));
+      updateTopBar(view, slowAcc);
+      slowAcc = 0;
+    }
     updateCompass(view);
-    updateTopBar(view);
 
     setText(hpNum, formatHealth(view.hp));
     setStyle(hpFill, 'transform', scaleX(hpFraction(view.hp)));
     setFlag(bl, 'low', isLowHealth(view.hp));
     setFlag(root, 'hud-lowhp', isLowHealth(view.hp) && view.alive);
-    setStyle(root, '--hud-hp', hpFraction(view.hp).toFixed(3));
     setStyle(staminaFill, 'transform', scaleX(clamp01(view.stamina)));
 
     setText(weaponEl, view.weaponName);
     setText(ammoEl, formatAmmo(view.ammo, view.reserve, view.reloading));
-    updateGadgets(view);
-    updateStatuses(view);
-    updateKillstreak(view);
+    if (runSlow) {
+      updateGadgets(view);
+      updateStatuses(view);
+      updateKillstreak(view);
+    }
 
     updateHitMarker(view, step);
     updateKia(view);
     updateScoreboard(extras);
     setText(prompt, view.prompt);
     updateAnnounce(view, step);
-    updateFeed(view);
+    if (runSlow) updateFeed(view);
 
     const project = options.project;
     updateWorldLabels(view, project);

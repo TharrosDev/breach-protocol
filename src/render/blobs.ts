@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { cachedTexture, freezeStatic } from './texture-cache';
 import type { Vec3 } from '../core/math';
 
 // The collider fields the shadows need. CollisionWorld does not expose its boxes, so the caller supplies them.
@@ -20,22 +22,34 @@ export function buildBlobs(scene: THREE.Scene, boxes: Iterable<BlobBox>): THREE.
     depthWrite: false,
   });
 
-  const out: THREE.Object3D[] = [];
+  // Every blob is baked into one geometry: one draw call for all the contact shadows.
+  const parts: THREE.BufferGeometry[] = [];
   for (const c of boxes) {
     if (c.breakable || c.max.y > MAX_HEIGHT) continue;
     const w = c.max.x - c.min.x;
     const d = c.max.z - c.min.z;
-    const m = new THREE.Mesh(new THREE.PlaneGeometry(w + MARGIN, d + MARGIN), mat);
-    m.rotation.x = -Math.PI / 2;
-    m.position.set((c.min.x + c.max.x) / 2, 0.02, (c.min.z + c.max.z) / 2);
-    scene.add(m);
-    out.push(m);
+    const g = new THREE.PlaneGeometry(w + MARGIN, d + MARGIN);
+    g.rotateX(-Math.PI / 2);
+    g.translate((c.min.x + c.max.x) / 2, 0.02, (c.min.z + c.max.z) / 2);
+    parts.push(g);
   }
-  return out;
+  const merged = parts.length === 0 ? null : mergeGeometries(parts);
+  for (const g of parts) g.dispose();
+  if (merged === null) {
+    mat.dispose();
+    return [];
+  }
+  const m = freezeStatic(new THREE.Mesh(merged, mat));
+  scene.add(m);
+  return [m];
 }
 
 // Legacy TEX_FX.blob (index.html:1125-1131): a 128 px radial gradient with an inner radius of 8 px.
 function makeBlobTexture(): THREE.CanvasTexture {
+  return cachedTexture('blob', drawBlobTexture);
+}
+
+function drawBlobTexture(): THREE.CanvasTexture {
   const size = 128;
   const canvas = document.createElement('canvas');
   canvas.width = size;

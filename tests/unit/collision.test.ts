@@ -96,3 +96,50 @@ describe('CollisionWorld pointFree', () => {
     expect(world.pointFree(10, 10, 0.35)).toBe(true);
   });
 });
+
+describe('CollisionWorld broadphase', () => {
+  // The grid must answer exactly as the plain loop over every box does.
+  it('matches the plain loop for random rays, point tests and push-outs', () => {
+    let seed = 7;
+    const rnd = (): number => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    const grid = new CollisionWorld();
+    const plain = new CollisionWorld({ grid: false });
+    const ids: number[] = [];
+    for (let i = 0; i < 160; i++) {
+      const x = -60 + rnd() * 120;
+      const z = -60 + rnd() * 120;
+      const box: Aabb = {
+        min: { x, y: 0, z },
+        max: { x: x + 0.3 + rnd() * 12, y: 0.5 + rnd() * 4, z: z + 0.3 + rnd() * 12 },
+      };
+      const breakable = rnd() < 0.2;
+      ids.push(grid.add(box, { breakable }));
+      plain.add(box, { breakable });
+    }
+    for (const id of ids.filter((_, i) => i % 9 === 0)) {
+      grid.remove(id);
+      plain.remove(id);
+    }
+    for (let i = 0; i < 1500; i++) {
+      const o = { x: -70 + rnd() * 140, y: rnd() * 3, z: -70 + rnd() * 140 };
+      const a = rnd() * Math.PI * 2;
+      const e = (rnd() - 0.5) * 0.8;
+      const d = { x: Math.cos(a) * Math.cos(e), y: Math.sin(e), z: Math.sin(a) * Math.cos(e) };
+      const maxT = rnd() < 0.1 ? Infinity : rnd() * 120;
+      const only = rnd() < 0.2;
+      expect(grid.raycast(o, d, maxT, { onlyBreakable: only })).toEqual(
+        plain.raycast(o, d, maxT, { onlyBreakable: only }),
+      );
+      const r = 0.2 + rnd() * 1.2;
+      expect(grid.pointFree(o.x, o.z, r)).toBe(plain.pointFree(o.x, o.z, r));
+      const p1 = { x: o.x, z: o.z };
+      const p2 = { x: o.x, z: o.z };
+      grid.pushOut(p1, 0.4);
+      plain.pushOut(p2, 0.4);
+      expect(p1).toEqual(p2);
+    }
+  });
+});

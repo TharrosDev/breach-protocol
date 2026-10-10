@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { cachedTexture, freezeStatic } from './texture-cache';
 import type { Rng } from '../core/rng';
 import type { BoxId, CollisionWorld } from '../sim/collision';
 
@@ -83,8 +85,18 @@ export function buildLamps(
     depthWrite: false,
   });
 
+  // The static parts of every lamp are baked into one geometry per material: poles, heads and light cones are three
+  // draw calls for the whole map instead of five per lamp. Only the glow sprites stay separate.
   const meshes: THREE.Object3D[] = [];
   const poleIds: BoxId[] = [];
+  const poleParts: THREE.BufferGeometry[] = [];
+  const headParts: THREE.BufferGeometry[] = [];
+  const beamParts: THREE.BufferGeometry[] = [];
+  const placed = (geo: THREE.BufferGeometry, x: number, y: number, z: number): THREE.BufferGeometry => {
+    const g = geo.clone();
+    g.translate(x, y, z);
+    return g;
+  };
   for (const { x, z } of sites) {
     poleIds.push(
       world.add({
@@ -92,23 +104,34 @@ export function buildLamps(
         max: { x: x + POLE_HALF, y: POLE_HEIGHT, z: z + POLE_HALF },
       }),
     );
-    const head = new THREE.Mesh(headGeo, headMat);
-    head.position.set(x, HEAD_Y, z);
+    headParts.push(placed(headGeo, x, HEAD_Y, z));
+    poleParts.push(
+      placed(poleGeo, x, POLE_HEIGHT / 2, z),
+      placed(baseGeo, x, 0.15, z),
+      placed(armGeo, x, HEAD_Y - 0.05, z),
+    );
+    beamParts.push(placed(beamGeo, x, HEAD_Y - 0.1, z));
     const glow = new THREE.Sprite(glowMat);
     glow.position.set(x, GLOW_Y, z);
     glow.scale.setScalar(GLOW_SCALE);
-    const pole = new THREE.Mesh(poleGeo, poleMat);
-    pole.position.set(x, POLE_HEIGHT / 2, z);
-    pole.castShadow = true;
-    const base = new THREE.Mesh(baseGeo, poleMat);
-    base.position.set(x, 0.15, z);
-    const arm = new THREE.Mesh(armGeo, poleMat);
-    arm.position.set(x, HEAD_Y - 0.05, z);
-    const beam = new THREE.Mesh(beamGeo, beamMat);
-    beam.position.set(x, HEAD_Y - 0.1, z);
-    scene.add(head, glow, pole, base, arm, beam);
-    meshes.push(head, glow, pole, base, arm, beam);
+    scene.add(glow);
+    meshes.push(glow);
   }
+  const mergedGeos: THREE.BufferGeometry[] = [];
+  const addMerged = (parts: THREE.BufferGeometry[], mat: THREE.Material, shadow: boolean): void => {
+    if (parts.length === 0) return;
+    const merged = mergeGeometries(parts);
+    for (const g of parts) g.dispose();
+    mergedGeos.push(merged);
+    const mesh = new THREE.Mesh(merged, mat);
+    mesh.castShadow = shadow;
+    freezeStatic(mesh);
+    scene.add(mesh);
+    meshes.push(mesh);
+  };
+  addMerged(headParts, headMat, false);
+  addMerged(poleParts, poleMat, true);
+  addMerged(beamParts, beamMat, false);
 
   let disposed = false;
   return {
@@ -129,6 +152,7 @@ export function buildLamps(
       disposed = true;
       for (const id of poleIds) world.remove(id);
       for (const m of meshes) scene.remove(m);
+      for (const g of mergedGeos) g.dispose();
       headGeo.dispose();
       poleGeo.dispose();
       poleMat.dispose();
@@ -145,6 +169,10 @@ export function buildLamps(
 
 // Legacy TEX_FX.glow (index.html:1117-1123): a 128 px radial gradient.
 function makeGlowTexture(): THREE.CanvasTexture {
+  return cachedTexture('lamp-glow', drawGlowTexture);
+}
+
+function drawGlowTexture(): THREE.CanvasTexture {
   const size = 128;
   const canvas = document.createElement('canvas');
   canvas.width = size;

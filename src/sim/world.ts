@@ -424,7 +424,9 @@ export class SimWorld {
     }
 
     // Dead hostiles stay for 4 s, then leave the list (legacy index.html:2938-2941).
-    this.enemies = this.enemies.filter((e) => e.alive || e.deathT > 0);
+    if (this.enemies.some((e) => !e.alive && e.deathT <= 0)) {
+      this.enemies = this.enemies.filter((e) => e.alive || e.deathT > 0);
+    }
 
     this.stepZones(dt, events);
 
@@ -509,29 +511,51 @@ export class SimWorld {
     );
   }
 
-  // The read-only view the AI steps against. Built per call so the player and squad states are current.
+  // The view the AI steps against. One object is kept and refreshed per call, so a tick of many hostiles allocates
+  // nothing here. The AI reads it and never keeps it.
+  private readonly aiCache: AiWorld = {
+    time: 0,
+    player: {
+      pos: { x: 0, y: 0, z: 0 },
+      eyeHeight: 0,
+      alive: true,
+      moving: false,
+      ghost: false,
+      order: 0,
+    },
+    enemies: [],
+    operators: [],
+    nav: undefined as unknown as GridNav,
+    collision: undefined as unknown as CollisionWorld,
+    smokes: [],
+    zones: [],
+    rng: undefined as unknown as Rng,
+    pathBudget: undefined as unknown as PathBudget,
+    difficulty: { dmg: 0, ai: 0 },
+  };
+
   private aiWorld(): AiWorld {
     const p = this.player;
-    return {
-      time: this.time,
-      player: {
-        pos: p.pos,
-        eyeHeight: p.eyeHeight,
-        alive: p.alive,
-        moving: p.moving,
-        ghost: this.opts.perk === 'ghost',
-        order: this.order,
-      },
-      enemies: this.enemies,
-      operators: this.operators,
-      nav: this.nav,
-      collision: this.collision,
-      smokes: this.smokes,
-      zones: this.zones,
-      rng: this.rng,
-      pathBudget: this.pathBudget,
-      difficulty: { dmg: this.opts.difficulty.dmg, ai: this.opts.difficulty.ai },
-    };
+    const w = this.aiCache;
+    const pv = w.player;
+    w.time = this.time;
+    pv.pos = p.pos;
+    pv.eyeHeight = p.eyeHeight;
+    pv.alive = p.alive;
+    pv.moving = p.moving;
+    pv.ghost = this.opts.perk === 'ghost';
+    pv.order = this.order;
+    w.enemies = this.enemies;
+    w.operators = this.operators;
+    w.nav = this.nav;
+    w.collision = this.collision;
+    w.smokes = this.smokes;
+    w.zones = this.zones;
+    w.rng = this.rng;
+    w.pathBudget = this.pathBudget;
+    w.difficulty.dmg = this.opts.difficulty.dmg;
+    w.difficulty.ai = this.opts.difficulty.ai;
+    return w;
   }
 
   // Open ground for spawns and respawns: no collider within r and no building footprint (legacy openPoint).
