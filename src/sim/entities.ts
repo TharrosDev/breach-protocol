@@ -29,7 +29,9 @@ export interface Enemy extends PathState {
   home: Vec2 | null;
   lastSeen: Vec2 | null;
   sight: number;
-  role: 'flank' | 'push';
+  // flank: swings wide to the player's side. push: advances. suppress: holds a firing position and keeps the
+  // player's head down, also with blind fire at the last sighting.
+  role: 'flank' | 'push' | 'suppress';
   flankSide: 1 | -1;
   fireT: number;
   blind: number;
@@ -49,6 +51,8 @@ export interface Enemy extends PathState {
   gz: number;
   kick: number;
   crouch: number;
+  // Seconds until a medic may report another heal (sound cue only).
+  healPing?: number;
 }
 
 export interface Operator extends PathState {
@@ -66,6 +70,9 @@ export interface Operator extends PathState {
   reviveT: number;
   moving: boolean;
   phase: number;
+  // Cover spot an operator ducks behind while hurt, and seconds left to use it.
+  cover?: Vec2 | null;
+  coverT?: number;
 }
 
 export type Target = { kind: 'player' } | { kind: 'operator'; index: number };
@@ -96,7 +103,8 @@ export interface AiWorld {
   zones: readonly { x: number; z: number; captured: boolean }[];
   rng: Rng;
   pathBudget: PathBudget;
-  difficulty: { dmg: number };
+  // ai is the tactical skill of the hostiles (content/difficulty.ts). Absent means the legacy behaviour.
+  difficulty: { dmg: number; ai?: number };
 }
 
 export type AiEvent =
@@ -104,4 +112,5 @@ export type AiEvent =
   | { type: 'shoot'; shooter: Enemy; target: Target; aim: Vec3; spread: number }
   | { type: 'grenade'; from: Vec3; to: Vec2 }
   | { type: 'spotted'; by: Enemy; target: Target }
-  | { type: 'operatorFire'; operator: Operator; enemy: Enemy };
+  | { type: 'operatorFire'; operator: Operator; enemy: Enemy }
+  | { type: 'medicHeal'; at: Vec2 };

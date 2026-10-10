@@ -144,9 +144,18 @@ export class ParticlePool {
 }
 
 // Points object sharing the pool's typed arrays, so sync() only flags them for upload.
+export interface ParticleViewOptions {
+  size?: number;
+  // Additive blending suits sparks and fire: a particle that fades to black fades out.
+  additive?: boolean;
+  // A soft round sprite instead of a square point.
+  map?: THREE.Texture | null;
+}
+
 export function buildParticles(
   scene: THREE.Scene,
   pool: ParticlePool,
+  options: ParticleViewOptions = {},
 ): { object: THREE.Points; sync(): void } {
   const position = new THREE.BufferAttribute(pool.positions, 3).setUsage(THREE.DynamicDrawUsage);
   const color = new THREE.BufferAttribute(pool.colors, 3).setUsage(THREE.DynamicDrawUsage);
@@ -156,10 +165,13 @@ export function buildParticles(
   geometry.setAttribute('color', color);
 
   const material = new THREE.PointsMaterial({
-    size: POINT_SIZE,
+    size: options.size ?? POINT_SIZE,
     vertexColors: true,
     transparent: true,
     depthWrite: false,
+    map: options.map ?? null,
+    blending: options.additive === true ? THREE.AdditiveBlending : THREE.NormalBlending,
+    alphaTest: options.additive === true || !options.map ? 0 : 0.02,
   });
 
   const object = new THREE.Points(geometry, material);

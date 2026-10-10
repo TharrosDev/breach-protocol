@@ -112,27 +112,49 @@ export function createSpotBoxes(parent: HTMLElement): SpotBoxes {
 }
 
 // Directional damage marker (legacy addDmgIndicator, index.html:1488-1495). relativeAngle is the bearing to the
-// source minus the player's yaw, as legacy computes it. The marker points at the source and removes itself.
-export function addDamageIndicator(root: HTMLElement, relativeAngle: number): void {
+// source minus the player's yaw, as legacy computes it. The marker is an arc on a ring around the crosshair that
+// points at the source, with a bright core, and removes itself. intensity (0..1) scales its brightness and width,
+// so a light hit is faint and a heavy hit is strong.
+export function addDamageIndicator(root: HTMLElement, relativeAngle: number, intensity = 0.7): void {
   const el = root.ownerDocument.createElement('div');
   el.className = 'hud-ind';
   el.style.setProperty('transform', `rotate(${(-relativeAngle).toFixed(3)}rad)`);
+  el.style.setProperty('--hud-ind-a', Math.min(1, Math.max(0.35, intensity)).toFixed(2));
+  const arc = root.ownerDocument.createElement('i');
+  el.append(arc);
   root.append(el);
   setTimeout(() => {
     el.remove();
   }, DAMAGE_INDICATOR_SECONDS * 1000);
 }
 
+// How many numbers are on screen right now, so a burst of hits fans out instead of stacking on one spot.
+let liveNumbers = 0;
+
 // Floating damage number at a screen point (legacy hitNumber, index.html:2820-2831). x and y are CSS pixels of the
-// root; the caller projects the hit point. Headshots use the kill colour and a larger size.
-export function addHitNumber(root: HTMLElement, x: number, y: number, value: number, head: boolean): void {
+// root; the caller projects the hit point. Headshots use the kill colour and a larger size; a kill gets the biggest
+// size. Each number drifts sideways a little, and the size grows with the damage.
+export function addHitNumber(
+  root: HTMLElement,
+  x: number,
+  y: number,
+  value: number,
+  head: boolean,
+  kill = false,
+): void {
   const el = root.ownerDocument.createElement('div');
-  el.className = head ? 'hud-dn head' : 'hud-dn';
+  const kind = kill ? ' kill' : head ? ' head' : '';
+  el.className = `hud-dn${kind}`;
   el.textContent = String(Math.round(value));
-  el.style.setProperty('left', `${x.toFixed(0)}px`);
-  el.style.setProperty('top', `${y.toFixed(0)}px`);
+  const fan = (liveNumbers % 5) - 2;
+  el.style.setProperty('left', `${(x + fan * 14).toFixed(0)}px`);
+  el.style.setProperty('top', `${(y - Math.min(liveNumbers, 4) * 6).toFixed(0)}px`);
+  el.style.setProperty('--hud-dn-drift', `${String(fan * 9)}px`);
+  el.style.setProperty('--hud-dn-size', `${(14 + Math.min(14, value / 6)).toFixed(0)}px`);
   root.append(el);
+  liveNumbers += 1;
   setTimeout(() => {
     el.remove();
+    liveNumbers = Math.max(0, liveNumbers - 1);
   }, HIT_NUMBER_SECONDS * 1000);
 }

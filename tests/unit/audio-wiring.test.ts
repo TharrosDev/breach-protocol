@@ -132,10 +132,22 @@ describe('mapSimEventToSound', () => {
       type: 'sentry',
     });
     expect(
-      mapSimEventToSound({ type: 'enemyKilled', enemy: shooterOf('rifle'), by: 'player', head: true }),
+      mapSimEventToSound({
+        type: 'enemyKilled',
+        enemy: shooterOf('rifle'),
+        by: 'player',
+        head: true,
+        source: 'vx',
+      }),
     ).toEqual({ type: 'kill', head: true });
     expect(
-      mapSimEventToSound({ type: 'enemyKilled', enemy: shooterOf('rifle'), by: 'operator', head: false }),
+      mapSimEventToSound({
+        type: 'enemyKilled',
+        enemy: shooterOf('rifle'),
+        by: 'operator',
+        head: false,
+        source: 'squad',
+      }),
     ).toEqual({ type: 'kill', head: false });
   });
 

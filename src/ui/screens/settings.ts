@@ -7,7 +7,10 @@ import { YAW_PER_PX } from '../../content/tuning';
 import {
   DEFAULT_SETTINGS,
   DPI_VALUES,
+  validateCrosshair,
+  validateCrosshairColour,
   validateDpi,
+  validateFpsCap,
   validateQuality,
   type Settings,
 } from '../../persist/schema';
@@ -18,6 +21,7 @@ import {
   applyRebind,
   bindEscape,
   calcText,
+  PAD_ROWS,
   h,
   keyLabel,
   navButton,
@@ -80,6 +84,21 @@ function rangeRow(text: string, min: number, max: number, step: number): RangeRo
   control.append(input, ' ', output);
   row.append(h('span', '', text), control);
   return { row, input, output };
+}
+
+function selectRow(
+  text: string,
+  options: readonly (readonly [string, string])[],
+): { row: HTMLElement; select: HTMLSelectElement } {
+  const select = h('select');
+  for (const [value, label] of options) {
+    const option = h('option', '', label);
+    option.value = value;
+    select.append(option);
+  }
+  const row = h('label', 'scr-row');
+  row.append(h('span', '', text), select);
+  return { row, select };
 }
 
 function checkRow(text: string): { row: HTMLElement; input: HTMLInputElement } {
@@ -155,6 +174,15 @@ export function createSettingsScreen(opts: SettingsOptions): SettingsScreen {
   resetKeys.addEventListener('click', () => {
     resetBindings();
   });
+  const padList = h('div', 'scr-keys');
+  for (const row of PAD_ROWS) {
+    const cell = h('span', 'scr-kc');
+    row.keys.forEach((key, i) => {
+      if (i > 0) cell.append(' ');
+      cell.append(h('kbd', '', key));
+    });
+    padList.append(cell, h('span', '', row.text));
+  }
   const keyStack = h('div', 'scr-stack');
   keyStack.append(resetKeys);
 
@@ -224,6 +252,45 @@ export function createSettingsScreen(opts: SettingsOptions): SettingsScreen {
   shake.input.addEventListener('change', () => {
     apply({ shake: shake.input.checked });
   });
+  const crosshair = selectRow('Crosshair style', [
+    ['cross', 'Cross'],
+    ['dot', 'Dot'],
+    ['circle', 'Circle'],
+    ['tee', 'T shape'],
+  ] as const);
+  crosshair.select.addEventListener('change', () => {
+    const next = validateCrosshair(crosshair.select.value);
+    if (next !== undefined) apply({ crosshair: next });
+  });
+  const crosshairColour = selectRow('Crosshair colour', [
+    ['default', 'White'],
+    ['green', 'Green'],
+    ['cyan', 'Cyan'],
+    ['magenta', 'Magenta'],
+    ['amber', 'Amber'],
+  ] as const);
+  crosshairColour.select.addEventListener('change', () => {
+    const next = validateCrosshairColour(crosshairColour.select.value);
+    if (next !== undefined) apply({ crosshairColour: next });
+  });
+  const damageNumbers = checkRow('Show damage numbers');
+  damageNumbers.input.addEventListener('change', () => {
+    apply({ damageNumbers: damageNumbers.input.checked });
+  });
+  const reducedMotion = checkRow('Reduced motion (no shake, bob or screen animation)');
+  reducedMotion.input.addEventListener('change', () => {
+    apply({ reducedMotion: reducedMotion.input.checked });
+  });
+  const fpsCap = selectRow('Frame rate limit', [
+    ['0', 'Display refresh rate'],
+    ['30', '30 FPS'],
+    ['60', '60 FPS'],
+    ['120', '120 FPS'],
+  ] as const);
+  fpsCap.select.addEventListener('change', () => {
+    const next = validateFpsCap(Number(fpsCap.select.value));
+    if (next !== undefined) apply({ fpsCap: next });
+  });
   const colourblind = checkRow('Colour-blind friendly colours (zones, HUD, markers)');
   colourblind.input.addEventListener('change', () => {
     apply({ colorblind: colourblind.input.checked });
@@ -257,6 +324,9 @@ export function createSettingsScreen(opts: SettingsOptions): SettingsScreen {
       h('p', 'scr-hint', 'Click a key, then press the new one. Press Esc to cancel.'),
       bindList,
       keyStack,
+      sectionLabel('Gamepad'),
+      h('p', 'scr-hint', 'A controller works as soon as you press a button on it. Its buttons are fixed.'),
+      padList,
     ]),
     makePane('mouse', 'Mouse', [sectionLabel('Look'), sens.row, ads.row, dpiRow, invert.row, calc]),
     makePane('display', 'Display', [
@@ -265,7 +335,13 @@ export function createSettingsScreen(opts: SettingsOptions): SettingsScreen {
       qualityRow,
       fps.row,
       shake.row,
+      reducedMotion.row,
+      fpsCap.row,
       colourblind.row,
+      sectionLabel('Crosshair'),
+      crosshair.row,
+      crosshairColour.row,
+      damageNumbers.row,
     ]),
     makePane('audio', 'Audio', [sectionLabel('Sound'), volume.row, mute.row]),
   );
@@ -311,6 +387,11 @@ export function createSettingsScreen(opts: SettingsOptions): SettingsScreen {
     fps.input.checked = settings.showFps;
     shake.input.checked = settings.shake;
     colourblind.input.checked = settings.colorblind;
+    crosshair.select.value = settings.crosshair;
+    crosshairColour.select.value = settings.crosshairColour;
+    damageNumbers.input.checked = settings.damageNumbers;
+    reducedMotion.input.checked = settings.reducedMotion;
+    fpsCap.select.value = String(settings.fpsCap);
     volume.input.value = String(settings.volume);
     volume.output.textContent = formatPercent(settings.volume);
     mute.input.checked = settings.muted;

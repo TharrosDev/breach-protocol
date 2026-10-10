@@ -66,7 +66,7 @@
   background: var(--tok-friendly);
   transform-origin: left center;
   transform: scaleX(0);
-  transition: transform 0.12s;
+  transition: transform 0.35s cubic-bezier(0.22, 0.8, 0.3, 1);
 }
 
 .hud kbd {
@@ -109,9 +109,48 @@
 }
 
 .hud-vig {
-  background:
-    linear-gradient(to right, var(--hud-vig-edge), transparent 16%, transparent 84%, var(--hud-vig-edge)),
-    linear-gradient(to bottom, var(--hud-vig-edge), transparent 16%, transparent 84%, var(--hud-vig-edge));
+  background: radial-gradient(
+    ellipse at center,
+    transparent 38%,
+    color-mix(in srgb, var(--hud-vig-edge) 55%, transparent) 78%,
+    var(--hud-vig-edge) 100%
+  );
+}
+
+/* Low health: a slow heartbeat on a second vignette layer that does not need a hit to show. */
+.hud::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 45%,
+    color-mix(in srgb, var(--tok-health-low) 45%, transparent) 100%
+  );
+  transition: opacity 0.4s;
+}
+
+.hud.hud-lowhp::after {
+  opacity: 1;
+  animation: hud-heart 1.15s ease-in-out infinite;
+}
+
+@keyframes hud-heart {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  14% {
+    opacity: 1;
+  }
+  28% {
+    opacity: 0.45;
+  }
+  42% {
+    opacity: 0.85;
+  }
 }
 
 /* Crosshair. The gap is set on the root as --hud-gap (5 px plus 220 px per unit of spread). */
@@ -125,6 +164,9 @@
 
 .hud-cross i {
   position: absolute;
+  transition:
+    top 0.07s ease-out,
+    left 0.07s ease-out;
   background: var(--tok-ink);
   box-shadow: 0 0 2px var(--tok-panel);
   opacity: 0.95;
@@ -234,61 +276,100 @@
   white-space: nowrap;
 }
 
-/* Floating damage numbers (addHitNumber). */
+/* Floating damage numbers (addHitNumber). Size comes from --hud-dn-size, the sideways drift from --hud-dn-drift. */
 .hud-dn {
   position: absolute;
   transform: translate(-50%, -50%);
-  font-size: 18px;
+  font-size: var(--hud-dn-size, 18px);
   font-weight: 900;
   color: var(--tok-ink);
-  text-shadow: 0 1px 3px var(--tok-panel);
+  text-shadow:
+    0 1px 3px var(--tok-panel),
+    0 0 8px var(--tok-panel);
   white-space: nowrap;
-  animation: hud-dn 0.8s ease-out forwards;
+  animation: hud-dn 0.8s cubic-bezier(0.2, 0.7, 0.3, 1) forwards;
 }
 
 .hud-dn.head {
   color: var(--tok-kill);
-  font-size: 22px;
+  font-size: calc(var(--hud-dn-size, 18px) + 4px);
+}
+
+.hud-dn.kill {
+  color: var(--tok-kill);
+  font-size: calc(var(--hud-dn-size, 18px) + 8px);
+  animation-name: hud-dn-kill;
 }
 
 @keyframes hud-dn {
-  from {
-    transform: translate(-50%, -50%);
+  0% {
+    transform: translate(-50%, -50%) scale(0.6);
+    opacity: 0;
+  }
+  12% {
+    transform: translate(-50%, -60%) scale(1.25);
     opacity: 1;
   }
-  to {
-    transform: translate(-50%, calc(-50% - 30px));
+  100% {
+    transform: translate(calc(-50% + var(--hud-dn-drift, 0px)), calc(-50% - 44px)) scale(0.9);
     opacity: 0;
   }
 }
 
-/* Directional damage marker (addDamageIndicator). */
+@keyframes hud-dn-kill {
+  0% {
+    transform: translate(-50%, -50%) scale(0.5);
+    opacity: 0;
+  }
+  15% {
+    transform: translate(-50%, -60%) scale(1.5);
+    opacity: 1;
+  }
+  100% {
+    transform: translate(calc(-50% + var(--hud-dn-drift, 0px)), calc(-50% - 56px)) scale(1);
+    opacity: 0;
+  }
+}
+
+/* Directional damage marker (addDamageIndicator): an arc on a ring around the crosshair, pointing at the source. */
 .hud-ind {
   position: absolute;
   left: 50%;
   top: 50%;
   width: 0;
   height: 0;
-  animation: hud-ind 1.1s forwards;
+  animation: hud-ind 1.1s ease-out forwards;
 }
 
-.hud-ind::before {
-  content: '';
+.hud-ind > i {
   position: absolute;
-  left: -60px;
-  top: -38vmin;
-  width: 120px;
-  height: 90px;
-  background: color-mix(in srgb, var(--tok-hostile) 75%, transparent);
-  clip-path: polygon(0 100%, 50% 0, 100% 100%);
+  left: -90px;
+  top: calc(-34vmin - 12px);
+  width: 180px;
+  height: 56px;
+  opacity: var(--hud-ind-a, 0.7);
+  background: radial-gradient(
+    ellipse 50% 100% at 50% 0%,
+    color-mix(in srgb, var(--tok-hostile) 92%, transparent),
+    color-mix(in srgb, var(--tok-hostile) 35%, transparent) 55%,
+    transparent 75%
+  );
+  clip-path: polygon(0 0, 100% 0, 78% 100%, 22% 100%);
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--tok-hostile) 60%, transparent));
 }
 
 @keyframes hud-ind {
   0% {
+    opacity: 0;
+    scale: 0.92;
+  }
+  10% {
     opacity: 1;
+    scale: 1;
   }
   100% {
     opacity: 0;
+    scale: 1;
   }
 }
 
@@ -835,4 +916,257 @@
   .hud-prompt {
     white-space: normal;
   }
+}
+
+/* ---------- crosshair feedback ---------- */
+
+.hud-dot {
+  position: absolute;
+  left: -1.5px;
+  top: -1.5px;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--tok-ink);
+  box-shadow: 0 0 3px var(--tok-panel);
+  opacity: 0.9;
+}
+
+/* A hit tints the crosshair for a moment, and a kill flares it. */
+.hud-cross[data-hit] i,
+.hud-cross[data-hit] .hud-dot {
+  background: var(--tok-hit);
+}
+
+.hud-cross[data-hit='kill'] i,
+.hud-cross[data-hit='kill'] .hud-dot,
+.hud-cross[data-hit='head'] i,
+.hud-cross[data-hit='head'] .hud-dot {
+  background: var(--tok-kill);
+}
+
+.hud-hitm.pop {
+  animation: hud-hitpop 0.18s ease-out;
+}
+
+.hud-hitm[data-kind='kill'],
+.hud-hitm[data-kind='head'] {
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+}
+
+.hud-hitm[data-kind='kill']::before,
+.hud-hitm[data-kind='kill']::after,
+.hud-hitm[data-kind='head']::before,
+.hud-hitm[data-kind='head']::after {
+  width: 3px;
+  height: 32px;
+  filter: drop-shadow(0 0 4px var(--hud-hit));
+}
+
+@keyframes hud-hitpop {
+  0% {
+    transform: scale(1.7);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* ---------- kill feed ---------- */
+
+.hud-fd {
+  border-left: 3px solid currentColor;
+}
+
+.hud-fd.new {
+  animation: hud-feed-in 0.28s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+@keyframes hud-feed-in {
+  from {
+    transform: translateX(40px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+/* ---------- objective and ticket motion ---------- */
+
+.hud-zn {
+  transition:
+    border-color 0.3s,
+    box-shadow 0.3s;
+}
+
+.hud-zn[data-s='contested'] {
+  border-color: var(--tok-objective-contested);
+  animation: hud-zn-pulse 0.9s ease-in-out infinite;
+}
+
+.hud-zn[data-s='capturing'] {
+  border-color: var(--tok-objective-capturing);
+}
+
+.hud-zn[data-s='captured'] {
+  border-color: var(--tok-objective-captured);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--tok-objective-captured) 35%, transparent);
+}
+
+@keyframes hud-zn-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 color-mix(in srgb, var(--tok-objective-contested) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 12px color-mix(in srgb, var(--tok-objective-contested) 55%, transparent);
+  }
+}
+
+.hud-etk {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+}
+
+.hud-etk .hud-bar {
+  grid-column: 1 / -1;
+}
+
+.hud-etk-num {
+  font-size: 14px;
+  color: var(--tok-ink);
+  transition: color 0.2s;
+}
+
+.hud-etk.drain .hud-etk-num {
+  color: var(--tok-kill);
+}
+
+.hud-etk.low .hud-etk-num {
+  color: var(--tok-warning);
+}
+
+.hud-etk-bar > i {
+  transition: transform 0.9s cubic-bezier(0.22, 0.8, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud.hud-lowhp::after,
+  .hud-zn[data-s='contested'],
+  .hud-fd.new,
+  .hud-hitm.pop {
+    animation: none;
+  }
+}
+
+/* ---------- timed effects: Aegis shield and stim shot ---------- */
+
+.hud-status {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.hud-chip {
+  padding: 4px 8px;
+  background: var(--tok-panel);
+  border: 1px solid var(--hud-line);
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.hud-chip[data-status='shield'] {
+  border-color: var(--tok-friendly);
+  color: var(--tok-friendly);
+}
+
+.hud-chip[data-status='stim'] {
+  border-color: var(--tok-good);
+  color: var(--tok-good);
+}
+
+.hud-chip-bar {
+  height: 3px;
+  margin-top: 3px;
+  background: color-mix(in srgb, var(--tok-ink) 12%, transparent);
+  border-radius: 2px;
+}
+
+.hud-chip-bar > i {
+  background: currentColor;
+}
+
+/* ---------- crosshair styles and colours (settings) ---------- */
+
+.hud-cross {
+  --hud-cross-col: var(--tok-ink);
+}
+
+.hud-cross[data-col='green'] {
+  --hud-cross-col: #5dff7a;
+}
+
+.hud-cross[data-col='cyan'] {
+  --hud-cross-col: #4fe3ff;
+}
+
+.hud-cross[data-col='magenta'] {
+  --hud-cross-col: #ff5de0;
+}
+
+.hud-cross[data-col='amber'] {
+  --hud-cross-col: #ffb020;
+}
+
+.hud-cross i,
+.hud-dot {
+  background: var(--hud-cross-col);
+}
+
+.hud-cross[data-style='dot'] i,
+.hud-cross[data-style='circle'] i {
+  display: none;
+}
+
+.hud-cross[data-style='tee'] i:nth-child(1) {
+  display: none;
+}
+
+.hud-cross[data-style='dot'] .hud-dot {
+  left: -2.5px;
+  top: -2.5px;
+  width: 5px;
+  height: 5px;
+}
+
+.hud-cross[data-style='circle']::before {
+  content: '';
+  position: absolute;
+  box-sizing: border-box;
+  width: calc(var(--hud-gap) * 2 + 14px);
+  height: calc(var(--hud-gap) * 2 + 14px);
+  left: calc(var(--hud-gap) * -1 - 7px);
+  top: calc(var(--hud-gap) * -1 - 7px);
+  border: 2px solid var(--hud-cross-col);
+  border-radius: 50%;
+  box-shadow: 0 0 2px var(--tok-panel);
+  opacity: 0.9;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud-cross i {
+    transition: none;
+  }
+}
+
+html[data-motion='reduced'] .hud-cross i {
+  transition: none;
 }

@@ -12,6 +12,12 @@ describe('quality profiles', () => {
       lampCount: 6,
       rainOnSubstation: true,
       muzzleLight: true,
+      particleScale: 1,
+      explosionPuffs: 16,
+      dynamicLights: true,
+      ambientCount: 140,
+      groundDetail: 140,
+      glow: true,
     });
   });
 
@@ -25,6 +31,12 @@ describe('quality profiles', () => {
       lampCount: 6,
       rainOnSubstation: false,
       muzzleLight: false,
+      particleScale: 0.5,
+      explosionPuffs: 5,
+      dynamicLights: false,
+      ambientCount: 36,
+      groundDetail: 30,
+      glow: false,
     });
   });
 

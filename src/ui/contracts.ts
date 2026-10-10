@@ -69,6 +69,8 @@ export interface HudView {
   hurt: number; // 0..1, from recent damage
   hitMarker: 'none' | 'hit' | 'kill' | 'head';
   feed: { text: string; cls: 'kill' | 'death' | 'good' | 'warn' | '' }[];
+  // Timed effects on the player, shown as small chips (Aegis shield, stim shot). Empty when none is running.
+  statuses: { id: 'shield' | 'stim'; label: string; left: number; frac: number }[];
   prompt: string;
   announce: { text: string; sub: string } | null;
   compassYaw: number;

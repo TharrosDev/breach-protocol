@@ -125,13 +125,15 @@ describe('HudState hit marker', () => {
 });
 
 describe('nextStreakAt', () => {
-  it('gives the next reward (3, 5, then 7), and null after the last', () => {
+  it('gives the next reward (3, 4, 5, 7, 9), and null after the last', () => {
     expect(nextStreakAt(0)).toBe(3);
     expect(nextStreakAt(2)).toBe(3);
-    expect(nextStreakAt(3)).toBe(5);
+    expect(nextStreakAt(3)).toBe(4);
+    expect(nextStreakAt(4)).toBe(5);
     expect(nextStreakAt(5)).toBe(7);
-    expect(nextStreakAt(7)).toBeNull();
+    expect(nextStreakAt(7)).toBe(9);
     expect(nextStreakAt(9)).toBeNull();
+    expect(nextStreakAt(12)).toBeNull();
   });
 });
 

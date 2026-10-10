@@ -6,14 +6,19 @@ const OPERATOR_COLOR = 0x2f6b8a;
 
 // The torso is the only 0.75-high box in a body.
 function torsoOf(group: THREE.Group): THREE.BoxGeometry {
-  const found = group.children.find(
-    (c): c is THREE.Mesh =>
+  let found: THREE.Mesh | undefined;
+  group.traverse((c) => {
+    if (
+      found === undefined &&
       c instanceof THREE.Mesh &&
       c.geometry instanceof THREE.BoxGeometry &&
-      c.geometry.parameters.height === 0.75,
-  );
-  if (!found) throw new Error('torso not found');
-  return found.geometry as THREE.BoxGeometry;
+      c.geometry.parameters.height === 0.75
+    )
+      found = c;
+  });
+  const mesh = found;
+  if (!mesh) throw new Error('torso not found');
+  return mesh.geometry as THREE.BoxGeometry;
 }
 
 function placeState(overrides: Partial<HumanPlaceState> = {}): HumanPlaceState {
@@ -76,9 +81,15 @@ describe('makeHumanRig', () => {
     const a = makeHumanRig('rifle', 0x56624f);
     const b = makeHumanRig('rifle', 0x56624f);
     const c = makeHumanRig('rifle', 0x111111);
-    expect((a.legs[0] as THREE.Mesh).geometry).toBe((b.legs[0] as THREE.Mesh).geometry);
-    expect((a.legs[0] as THREE.Mesh).material).toBe((b.legs[0] as THREE.Mesh).material);
-    expect((a.legs[0] as THREE.Mesh).material).not.toBe((c.legs[0] as THREE.Mesh).material);
+    expect((a.legs[0]?.children[0] as THREE.Mesh).geometry).toBe(
+      (b.legs[0]?.children[0] as THREE.Mesh).geometry,
+    );
+    expect((a.legs[0]?.children[0] as THREE.Mesh).material).toBe(
+      (b.legs[0]?.children[0] as THREE.Mesh).material,
+    );
+    expect((a.legs[0]?.children[0] as THREE.Mesh).material).not.toBe(
+      (c.legs[0]?.children[0] as THREE.Mesh).material,
+    );
   });
 });
 

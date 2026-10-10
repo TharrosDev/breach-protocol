@@ -87,6 +87,11 @@ export function buildHoleMeshes(
         scene.add(mesh);
         mesh.position.set(hole.pos.x, hole.pos.y, hole.pos.z);
         mesh.lookAt(hole.target.x, hole.target.y, hole.target.z);
+        // Each decal gets its own roll and size, from its position, so a burst does not stamp one picture.
+        const h = Math.sin(hole.pos.x * 12.9898 + hole.pos.y * 78.233 + hole.pos.z * 37.719) * 43758.5453;
+        const r = h - Math.floor(h);
+        mesh.rotateZ(r * Math.PI * 2);
+        mesh.scale.setScalar(0.7 + r * 0.7);
         meshes.set(hole, mesh);
       }
     },

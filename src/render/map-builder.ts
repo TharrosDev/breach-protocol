@@ -52,6 +52,53 @@ const SPAWN_COUNT = 24;
 const SPAWN_CLEARANCE = 1.5;
 const TAU = Math.PI * 2;
 
+// A tileable grey noise with specks and cracks. Multiplies the ground colour, so each map keeps its own hue.
+function makeGroundTexture(): THREE.CanvasTexture | null {
+  if (typeof document === 'undefined') return null;
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const g = canvas.getContext('2d');
+  if (g === null) return null;
+  g.fillStyle = '#c8c8c8';
+  g.fillRect(0, 0, size, size);
+  let seed = 12345;
+  const rnd = (): number => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  for (let i = 0; i < 2600; i++) {
+    const v = 150 + Math.floor(rnd() * 105);
+    g.fillStyle = `rgba(${String(v)},${String(v)},${String(v)},0.35)`;
+    const r = 1 + rnd() * 5;
+    g.beginPath();
+    g.arc(rnd() * size, rnd() * size, r, 0, Math.PI * 2);
+    g.fill();
+  }
+  g.strokeStyle = 'rgba(90,90,90,0.35)';
+  for (let i = 0; i < 14; i++) {
+    g.lineWidth = 0.6 + rnd();
+    g.beginPath();
+    let x = rnd() * size;
+    let y = rnd() * size;
+    g.moveTo(x, y);
+    for (let k = 0; k < 5; k++) {
+      x += (rnd() - 0.5) * 40;
+      y += (rnd() - 0.5) * 40;
+      g.lineTo(x, y);
+    }
+    g.stroke();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(48, 48);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
 function d2(ax: number, az: number, bx: number, bz: number): number {
   return (ax - bx) ** 2 + (az - bz) ** 2;
 }
@@ -92,6 +139,12 @@ export function buildMap(def: MapDef, scene: THREE.Scene, world: CollisionWorld,
     new THREE.MeshStandardMaterial({ color: 0xe0b030, emissive: 0x4a3600, roughness: 0.6 }),
   );
   const groundMat = own(new THREE.MeshStandardMaterial({ color: def.ground, roughness: 1 }));
+  const groundTex = makeGroundTexture();
+  if (groundTex) {
+    groundMat.map = groundTex;
+    groundMat.bumpMap = groundTex;
+    groundMat.bumpScale = 0.6;
+  }
 
   const add = (o: THREE.Object3D): void => {
     scene.add(o);

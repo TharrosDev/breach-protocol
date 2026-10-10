@@ -112,6 +112,8 @@ import type { Bindings } from '../input/bindings';
 import { buildCommand } from '../input/commands';
 import { KeyboardInput } from '../input/keyboard';
 import { MouseInput } from '../input/mouse';
+import { GamepadInput } from '../input/gamepad';
+import { MatchTally, buildMatchStats, type MatchStats } from '../progress/tally';
 import { PointerLock } from '../input/pointer-lock';
 import type { Loadout, Quality, Settings } from '../persist/schema';
 import { applyEnvironment, createPostChain, type PostChain } from '../render/post';
@@ -120,7 +122,9 @@ import { buildGrass } from '../render/grass';
 import { buildLamps } from '../render/lamps';
 import { buildBlobs, type BlobBox } from '../render/blobs';
 import { RainField, buildRain } from '../render/rain';
-import { ParticlePool, buildParticles } from '../render/particles';
+import { classifySurface, createFxHub, type FxHub } from '../render/vfx';
+import { buildAtmosphere } from '../render/atmosphere';
+import { addTrauma, createCameraFeel, stepCameraFeel } from '../render/camera-feel';
 import { DebrisField, buildDebrisMeshes } from '../render/debris';
 import { HoleField, buildHoleMeshes } from '../render/holes';
 import { CasingField } from '../render/casings';
@@ -133,16 +137,19 @@ import {
   tracerSegment,
 } from '../render/tracers';
 import { createRenderer } from '../render/renderer';
+import { createStreakFx } from '../render/streak-fx';
 import {
   applyLook as applyViewmodelLook,
   createViewmodel,
   gunPose,
   isScoped,
   stepViewmodel,
+  kickViewmodel,
 } from '../render/viewmodel';
-import { buildGunModel, type GunModel } from '../render/gun-models';
+import { buildGunModel, flashMuzzle, poseGun, type GunModel } from '../render/gun-models';
 import {
   animateHuman,
+  flashHuman,
   makeHumanRig,
   placeHumanEnemy,
   type HumanPlaceState,
@@ -152,10 +159,12 @@ import { createContextLossHandler } from '../render/context-loss';
 import { buildZoneVisual, type ZoneVisual } from '../render/zones';
 import {
   breachMarker,
+  claymoreModel,
   droneModel,
   grenadeMesh,
   smokeCloud,
   type BreachMarker,
+  type ClaymoreModel,
   type DroneModel,
   type GrenadeKind as GrenadeViewKind,
   type SmokeCloud as SmokeCloudView,
@@ -166,6 +175,7 @@ import type { Enemy } from '../sim/entities';
 import type { Grenade, SmokeCloud } from '../sim/grenades';
 import type { MatchResult } from '../sim/match';
 import type { Turret } from '../sim/turret';
+import type { Mine } from '../sim/mines';
 import type { WeaponState } from '../sim/weapons';
 import { SimWorld, type SimEvent, type SimEvents } from '../sim/world';
 import { installDebugHook, type GameState } from './debug-hook';
@@ -223,7 +233,7 @@ export interface MatchHooks {
   // The match resumed: the shell hides the pause screen.
   onResume(): void;
   // The match ended: the shell shows the debrief. The match stops until the shell disposes it.
-  onOver(result: MatchResult): void;
+  onOver(result: MatchResult, stats: MatchStats): void;
 }
 
 export interface MatchOptions extends MatchHooks {
@@ -258,13 +268,6 @@ const MUZZLE_COLOR = 0xffb060;
 const MUZZLE_INTENSITY = 3;
 const MUZZLE_DISTANCE = 6;
 const MUZZLE_DECAY = 2;
-const PARTICLE_POOL = 500;
-// Legacy impact (index.html:1378-1381): a bright spark burst and a dust burst.
-const SPARK_BURST = { n: 6, speed: 3.2, hex: 0xffc878, life: 0.3, up: 0 };
-const DUST_BURST = { n: 3, speed: 0.9, hex: 0x9a9488, life: 0.7, up: 0.4 };
-// Legacy damageEnemy blood burst (index.html:2525) and grenade blast (index.html:1972).
-const BLOOD_BURST = { n: 10, speed: 2.5, hex: 0x8a1212, life: 0.5, up: 0 };
-const FRAG_BURST = { n: 60, speed: 8, hex: 0xff5a3a, life: 0.8, up: 0 };
 // The rain only runs on the Substation map (legacy index.html:3156).
 const RAIN_MAP = 'substation';
 // Hostile body height used for the blood burst (index.html:2525).
@@ -276,10 +279,8 @@ const HIDING_REACH = 0.9;
 // index.html:1728 (ADS blend rate with Reflex). Without Reflex the rate is 12 (spec §1.2).
 const ADS_RATE_REFLEX = 17;
 const ADS_RATE_PLAIN = 12;
-// Screen shake (legacy P.shake, index.html:1776-1777): offset = shake * SHAKE_SCALE metres, decays at SHAKE_DECAY/s.
-const SHAKE_HIT = 0.15;
-const SHAKE_SCALE = 0.06;
-const SHAKE_DECAY = 2;
+// Low-health ramp for the screen grade: 0 above 40 % health, 1 at zero.
+const lowHealth = (hp: number): number => clamp(1 - hp / 40, 0, 1);
 
 function clamp(v: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, v));
@@ -511,8 +512,12 @@ function runSession(
 
   // Effects. Pools are created here and updated each frame; the sim step only emits.
   const fxRng = mapRng.fork('fx');
-  const particles = new ParticlePool(PARTICLE_POOL);
-  const particleView = buildParticles(scene, particles);
+  let fx: FxHub = createFxHub(scene, profile, fxRng.fork('hub'));
+  const feel = createCameraFeel();
+  let muzzleSeed = 0;
+  let fovDelta = 0;
+  let fxClock = 0;
+  const atmosphere = buildAtmosphere(scene, map, profile, mapRng.fork('atmo'), world, sun, hemi);
   const debris = new DebrisField();
   const debrisView = buildDebrisMeshes(scene, debris);
   const holes = new HoleField();
@@ -520,10 +525,12 @@ function runSession(
   const casings = new CasingField();
   const casingView = buildCasingMeshes(scene, casings);
   const tracers = new TracerPool();
-  const tracerView = buildTracerMeshes(scene, tracers);
+  const tracerView = buildTracerMeshes(scene, tracers, profile.glow);
   // Shockwaves are wired for the explosions that come with the gadgets (phase 4). Enemy frags only flash.
   const shock = new ShockwaveField();
   const shockView = buildShockwaveMeshes(scene, shock);
+  // The Aegis bubble and the EMP ring.
+  const streakFx = createStreakFx(scene);
 
   // Hostile and operator bodies. Enemy rigs are created when the sim spawns an enemy and removed when it drops one.
   const enemyViews = new Map<Enemy, HumanView>();
@@ -543,6 +550,8 @@ function runSession(
   // Gadget and killstreak visuals. Each one is created when the sim has the entity and removed when it does not.
   const smokeViews = new Map<SmokeCloud, SmokeCloudView>();
   const grenadeViews = new Map<Grenade, THREE.Mesh>();
+  // Claymore models, one per mine in the sim (render/gadget-models.ts). Geometry is shared between them.
+  const mineViews = new Map<Mine, ClaymoreModel>();
   const turretViews = new Map<Turret, TurretModel>();
   let droneView: DroneModel | null = null;
   let breachView: BreachMarker | null = null;
@@ -564,13 +573,17 @@ function runSession(
   let disposed = false;
   let muzzleT = 0;
   let bobT = 0;
-  let shake = 0;
   let fpsFrames = 0;
   let fpsTime = 0;
   let hudMode: ColourMode = paletteOf(initial.settings);
+  let crosshairKey = '';
+  let lastRenderedAt = -Infinity;
   // True when the last draw was a held frame of a paused or finished match (see the end of frame()).
   let heldFrame = false;
 
+  // Per-match counters for the profile (headshots, best streak, kills by source), and the gamepad.
+  const tally = new MatchTally();
+  const pad = new GamepadInput();
   const keyboard = new KeyboardInput(() => state === 'play');
   keyboard.attach(window);
   const mouse = new MouseInput(() => state === 'play');
@@ -751,6 +764,8 @@ function runSession(
     renderer.shadowMap.enabled = profile.shadows;
     if (sun) sun.castShadow = profile.shadows;
     muzzle.visible = profile.muzzleLight;
+    fx.dispose();
+    fx = createFxHub(scene, profile, fxRng.fork('hub'));
     buildZones(next === 'high');
     rebuildGrass(profile.grassCount);
     // Materials recompile for the new shadow setting, as legacy does (index.html:720).
@@ -779,30 +794,32 @@ function runSession(
 
   const impact = (p: Vec3, dir: Vec3): void => {
     holes.add(p, dir);
-    particles.emitBurst(
-      p,
-      SPARK_BURST.n,
-      SPARK_BURST.speed,
-      SPARK_BURST.hex,
-      SPARK_BURST.life,
-      SPARK_BURST.up,
-      fxRng,
-    );
-    particles.emitBurst(
-      p,
-      DUST_BURST.n,
-      DUST_BURST.speed,
-      DUST_BURST.hex,
-      DUST_BURST.life,
-      DUST_BURST.up,
-      fxRng,
-    );
+    fx.impact(p, dir, classifySurface(p, mapH));
+  };
+
+  // Blood at a hostile, sprayed away from the shooter.
+  const bloodAt = (e: Enemy, head: boolean): void => {
+    const y = head ? 1.6 : BLOOD_Y;
+    const dx = e.pos.x - P.pos.x;
+    const dz = e.pos.z - P.pos.z;
+    const len = Math.hypot(dx, dz) || 1;
+    fx.blood({ x: e.pos.x, y, z: e.pos.z }, { x: dx / len, y: 0, z: dz / len }, head);
+    const v = enemyViews.get(e);
+    if (v !== undefined) flashHuman(v.rig);
+  };
+
+  // Shake from an explosion, stronger and shorter the farther away it is.
+  const blastTrauma = (at: Vec3, radius: number): void => {
+    const d = Math.hypot(at.x - P.pos.x, at.z - P.pos.z);
+    const k = Math.max(0, 1 - d / (radius * 5 + 10));
+    if (k > 0) addTrauma(feel, 0.25 + k * 0.6);
   };
 
   // A floating damage number above a hostile the player hit (legacy hitNumber, index.html:3389).
-  const hitNumberAt = (e: Enemy, damage: number, head: boolean): void => {
+  const hitNumberAt = (e: Enemy, damage: number, head: boolean, kill: boolean): void => {
+    if (!liveNow.settings.damageNumbers) return;
     const p = project(e.pos.x, HIT_NUMBER_Y, e.pos.z);
-    if (p.onScreen) addHitNumber(hudRoot, p.x, p.y, damage, head);
+    if (p.onScreen) addHitNumber(hudRoot, p.x, p.y, damage, head, kill);
   };
 
   // Turns the sim's events into sounds, effects, feed lines and the match end. The sim has already applied them.
@@ -818,6 +835,8 @@ function runSession(
     switch (ev.type) {
       case 'playerFire': {
         muzzleT = MUZZLE_TIME;
+        muzzleSeed = fxRng.next();
+        kickViewmodel(vm);
         // Legacy index.html:1828: the shotgun does not eject a casing.
         if (weaponNow().def.id !== 'bk')
           casings.eject({ x: P.pos.x, y: P.pos.y + P.eyeHeight, z: P.pos.z }, P.yaw, fxRng);
@@ -839,24 +858,18 @@ function runSession(
         return;
       }
       case 'enemyHit': {
-        particles.emitBurst(
-          { x: ev.enemy.pos.x, y: BLOOD_Y, z: ev.enemy.pos.z },
-          BLOOD_BURST.n,
-          BLOOD_BURST.speed,
-          BLOOD_BURST.hex,
-          BLOOD_BURST.life,
-          BLOOD_BURST.up,
-          fxRng,
-        );
+        bloodAt(ev.enemy, ev.head);
         if (ev.by === 'player') {
           hudState.hit('hit');
-          hitNumberAt(ev.enemy, ev.damage, ev.head);
+          // The sim has already applied the hit, so a dead hostile means this was the killing blow.
+          hitNumberAt(ev.enemy, ev.damage, ev.head, !ev.enemy.alive);
         }
         return;
       }
       case 'enemyKilled': {
         const label = ENEMY_DEFS[ev.enemy.kind].label;
         if (ev.by === 'player') {
+          tally.kill(ev.source, ev.head);
           hudState.playerKill(label, ev.head);
           hudState.hit(ev.head ? 'head' : 'kill');
         } else {
@@ -866,48 +879,31 @@ function runSession(
       }
       case 'playerHit': {
         // Legacy addDmgIndicator (index.html:1488): the marker points at the source, relative to the view.
-        addDamageIndicator(hudRoot, Math.atan2(ev.from.x - P.pos.x, ev.from.z - P.pos.z) - P.yaw);
-        shake = Math.max(shake, SHAKE_HIT);
+        addDamageIndicator(
+          hudRoot,
+          Math.atan2(ev.from.x - P.pos.x, ev.from.z - P.pos.z) - P.yaw,
+          0.4 + ev.damage / 40,
+        );
+        addTrauma(feel, Math.min(0.7, 0.15 + ev.damage / 80));
         return;
       }
       case 'grenadeBlast': {
-        particles.emitBurst(
-          ev.at,
-          FRAG_BURST.n,
-          FRAG_BURST.speed,
-          FRAG_BURST.hex,
-          FRAG_BURST.life,
-          FRAG_BURST.up,
-          fxRng,
-        );
+        fx.explosion(ev.at, ev.radius);
+        blastTrauma(ev.at, ev.radius);
         shock.add(ev.at, ev.radius);
         return;
       }
       case 'airstrikeBlast': {
-        particles.emitBurst(
-          ev.at,
-          FRAG_BURST.n,
-          FRAG_BURST.speed,
-          FRAG_BURST.hex,
-          FRAG_BURST.life,
-          FRAG_BURST.up,
-          fxRng,
-        );
+        fx.explosion(ev.at, ev.radius);
+        blastTrauma(ev.at, ev.radius);
         shock.add(ev.at, ev.radius);
         return;
       }
       case 'breachBlast': {
         // The sim has removed the collider. The wall's mesh goes with it.
         mapH.breakBox(ev.box);
-        particles.emitBurst(
-          ev.at,
-          FRAG_BURST.n,
-          FRAG_BURST.speed,
-          FRAG_BURST.hex,
-          FRAG_BURST.life,
-          FRAG_BURST.up,
-          fxRng,
-        );
+        fx.explosion(ev.at, ev.radius);
+        blastTrauma(ev.at, ev.radius);
         shock.add(ev.at, ev.radius);
         return;
       }
@@ -929,6 +925,9 @@ function runSession(
         return;
       }
       case 'killstreakUsed': {
+        tally.killstreakUsed();
+        if (ev.id === 'shield') streakFx.shieldFlash(P.pos);
+        else if (ev.id === 'emp') streakFx.empPulse(P.pos);
         const used = KILLSTREAK_USED[ev.id];
         hudState.feed(used.feed, 'good');
         hudState.announce(used.banner, used.sub);
@@ -947,6 +946,7 @@ function runSession(
         return;
       }
       case 'playerEliminated': {
+        tally.died();
         hudState.feed('You were eliminated', 'death');
         return;
       }
@@ -994,13 +994,25 @@ function runSession(
     fireClick = false;
     hud.setVisible(false);
     if (doc.pointerLockElement !== null) doc.exitPointerLock();
-    opts.onOver(result);
+    opts.onOver(result, buildMatchStats(result, tally, loadout.difficulty, loadout.primary));
   };
 
   const simStep = (first: boolean): void => {
     const pressed: ReadonlySet<string> = first ? pendingPressed : new Set<string>();
     if (first) pendingPressed = new Set<string>();
-    const cmd = buildCommand(keyboard.held(), mouse.buttons(), { dx: 0, dy: 0 }, pressed, liveNow.bindings);
+    // The pad's stick and held buttons count as keys, and its triggers as the mouse buttons.
+    const held = pad.connected
+      ? new Set([...keyboard.held(), ...pad.held(liveNow.bindings)])
+      : keyboard.held();
+    const mouseButtons = mouse.buttons();
+    const padButtons = pad.buttons();
+    const cmd = buildCommand(
+      held,
+      { fire: mouseButtons.fire || padButtons.fire, ads: mouseButtons.ads || padButtons.ads },
+      { dx: 0, dy: 0 },
+      pressed,
+      liveNow.bindings,
+    );
 
     prevX = P.pos.x;
     prevY = P.pos.y;
@@ -1148,6 +1160,23 @@ function runSession(
       m.position.set(g.pos.x, g.pos.y, g.pos.z);
     }
 
+    const liveMines = new Set<Mine>(sim.mines);
+    for (const [mn, m] of mineViews) {
+      if (!liveMines.has(mn)) {
+        m.dispose();
+        mineViews.delete(mn);
+      }
+    }
+    for (const mn of sim.mines) {
+      let m = mineViews.get(mn);
+      if (m === undefined) {
+        m = claymoreModel(mn.pos.x, mn.pos.z, mn.yaw ?? 0);
+        scene.add(m.group);
+        mineViews.set(mn, m);
+      }
+      m.update(mn.armT, sim.time);
+    }
+
     const liveTurrets = new Set<Turret>(sim.turrets);
     for (const [t, v] of turretViews) {
       if (!liveTurrets.has(t)) {
@@ -1193,9 +1222,12 @@ function runSession(
     raf = requestAnimationFrame(guardedFrame);
     const frameDt = last === null ? 0 : (now - last) / 1000;
     last = now;
-    const inPlay = state === 'play';
     liveNow = opts.live();
     const s = liveNow.settings;
+    // The pad is read every frame. Start pauses. Presses are only kept while the match is in play.
+    pad.poll();
+    if (state === 'play' && pad.takeStart()) pause();
+    const inPlay = state === 'play';
 
     // FPS sampling over real time, so the 5 s slow window means 5 s on the clock. A frame longer than
     // FPS_STALL_S (a hidden tab or a debugger pause) restarts the window instead of counting as one slow frame.
@@ -1214,6 +1246,11 @@ function runSession(
       if (governor.sample(fps, inPlay, quality) === 'downgrade') downgrade();
     }
     if (fpsEl.hidden !== !s.showFps) fpsEl.hidden = !s.showFps;
+    const crossKey = `${s.crosshair}:${s.crosshairColour}`;
+    if (crossKey !== crosshairKey) {
+      crosshairKey = crossKey;
+      hud.setCrosshair(s.crosshair, s.crosshairColour);
+    }
 
     // Settings changed on the settings screen take effect now.
     const mode = paletteOf(s);
@@ -1222,32 +1259,38 @@ function runSession(
       hud.setColourMode(mode);
     }
     if (s.quality !== quality) applyQuality(s.quality);
-    if (camera.fov !== s.fov) {
-      camera.fov = s.fov;
+    if (Math.abs(camera.fov - (s.fov + fovDelta)) > 0.01) {
+      camera.fov = s.fov + fovDelta;
       camera.updateProjectionMatrix();
     }
 
     // Effects and the viewmodel run on the clamped frame time, and stop while paused.
     const fxDt = inPlay ? capDt(frameDt) : 0;
     if (inPlay) {
-      const look = mouse.drainLook();
+      const mouseLook = mouse.drainLook();
+      const padLook = pad.look(fxDt);
+      const look = { dx: mouseLook.dx + padLook.dx, dy: mouseLook.dy + padLook.dy };
       applyLook(look.dx, look.dy, s);
       applyViewmodelLook(vm, look.dx, look.dy);
       for (const code of keyboard.drainPressed()) pendingPressed.add(code);
+      for (const code of pad.drainPressed(liveNow.bindings)) pendingPressed.add(code);
+      if (pad.takeFireEdge()) fireClick = true;
       const steps = step.advance(frameDt);
       for (let i = 0; i < steps; i++) simStep(i === 0);
       bobT += fxDt * bobSpeed(P.sprinting, P.moving);
       muzzleT = Math.max(0, muzzleT - fxDt);
-      shake = Math.max(0, shake - fxDt * SHAKE_DECAY);
       // Spring dt is capped at 0.05 s (see fxDt above).
-      stepViewmodel(vm, fxDt, currentReload());
+      stepViewmodel(vm, fxDt, currentReload(), P.sprinting && P.moving);
     } else {
       keyboard.drainPressed();
       mouse.drainLook();
+      pad.clear();
     }
 
-    particles.update(fxDt);
-    particleView.sync();
+    fxClock += fxDt;
+    fx.update(fxDt);
+    atmosphere.update(fxDt, P.pos.x, P.pos.y + P.eyeHeight, P.pos.z);
+    lamps.update(fxClock);
     debris.update(fxDt);
     debrisView.sync();
     casings.update(fxDt);
@@ -1256,6 +1299,7 @@ function runSession(
     tracerView.sync();
     shock.update(fxDt);
     shockView.sync();
+    streakFx.update(fxDt);
     holeView.sync();
     syncHumans(fxDt);
     syncWorld(fxDt);
@@ -1280,9 +1324,8 @@ function runSession(
       switchT: sim.switchT,
       reloadProgress: currentReload(),
     });
-    shown.group.position.set(pose.position[0], pose.position[1], pose.position[2]);
-    shown.group.rotation.set(pose.rotation[0], pose.rotation[1], pose.rotation[2]);
-    shown.mag.position.y = pose.magY;
+    poseGun(shown, pose);
+    flashMuzzle(shown, muzzleT > 0 ? muzzleT / MUZZLE_TIME : 0, muzzleSeed);
     shown.group.visible = viewmodelVisible(P.alive, isScoped(weaponNow().def.id, P.adsT));
     muzzle.intensity = muzzleT > 0 ? MUZZLE_INTENSITY : 0;
 
@@ -1293,12 +1336,26 @@ function runSession(
       lerp(prevY, P.pos.y, a) + P.eyeHeight,
       lerp(prevZ, P.pos.z, a),
     );
-    if (s.shake && shake > 0) {
-      const amp = shake * SHAKE_SCALE;
-      camera.position.x += fxRng.range(-amp, amp);
-      camera.position.y += fxRng.range(-amp, amp);
-    }
-    camera.rotation.set(P.pitch, P.yaw + Math.PI, 0, 'YXZ');
+    // Reduced motion drops the shake, the sprint FOV kick and the head bob.
+    const still = s.reducedMotion;
+    const off = stepCameraFeel(feel, fxDt, {
+      sprinting: P.sprinting && P.moving && !still,
+      moving: P.moving && !still,
+      bobT,
+      ads: P.adsT,
+      shakeScale: s.shake && !still ? 1 : 0,
+    });
+    fovDelta = off.fovDelta;
+    camera.position.x += off.x;
+    camera.position.y += off.y;
+    camera.rotation.set(P.pitch + off.pitch, P.yaw + Math.PI, off.roll, 'YXZ');
+    post?.setFx({
+      damage: Math.min(1, feel.trauma * 1.4),
+      low: lowHealth(P.hp),
+      flash: 0,
+      sprint: feel.sprint * (1 - P.adsT),
+      time: fxClock,
+    });
 
     // The HUD reads the sim after the step and the camera update, so its projections match this frame.
     hudState.advance(fxDt);
@@ -1319,6 +1376,14 @@ function runSession(
   // are counted and not logged again, so a fault that repeats every frame cannot flood the console.
   let frameFaults = 0;
   const guardedFrame = (now: number): void => {
+    // The frame rate limit skips animation frames until the interval has passed. The sim time is not affected: a
+    // skipped frame's time is added to the next one.
+    const cap = liveNow.settings.fpsCap;
+    if (cap > 0 && now - lastRenderedAt < 1000 / cap - 1) {
+      raf = requestAnimationFrame(guardedFrame);
+      return;
+    }
+    lastRenderedAt = now;
     try {
       frame(now);
     } catch (err) {
@@ -1376,11 +1441,16 @@ function runSession(
       smokeViews.clear();
       for (const v of turretViews.values()) v.dispose();
       turretViews.clear();
+      for (const v of mineViews.values()) v.dispose();
+      mineViews.clear();
+      streakFx.dispose();
       droneView?.dispose();
       droneView = null;
       breachView?.dispose();
       breachView = null;
       lamps.dispose();
+      atmosphere.dispose();
+      fx.dispose();
       mapH.dispose();
       // The remaining meshes and materials are freed by walking the scene. Textures on materials go with them.
       scene.environment?.dispose();

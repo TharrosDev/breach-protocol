@@ -37,6 +37,28 @@ export function tone(graph: AudioGraph, bus: BusName, freq: number, dur: number,
   osc.stop(now + dur);
 }
 
+// A tone that starts `delay` seconds from now, for short melodic cues (heal, shield, EMP).
+export function toneAt(
+  graph: AudioGraph,
+  bus: BusName,
+  freq: number,
+  dur: number,
+  vol: number,
+  delay: number,
+): void {
+  const ctx = graph.context;
+  const start = ctx.currentTime + delay;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.frequency.value = freq;
+  gain.gain.setValueAtTime(vol, start);
+  gain.gain.exponentialRampToValueAtTime(0.001, start + dur);
+  osc.connect(gain);
+  gain.connect(graph.input(bus));
+  osc.start(start);
+  osc.stop(start + dur);
+}
+
 // Named recipes. Each argument list is copied from the legacy call site named in its comment.
 export const SFX = {
   // Rifle, SMG, LMG and DMR fire. Legacy fire(), index.html:1832.
@@ -104,6 +126,34 @@ export const SFX = {
   // Sentry turret shot. updTurrets() at index.html:1582.
   sentry(graph: AudioGraph): void {
     noise(graph, 'sfx', 0.06, 2000, 0.07);
+  },
+
+  // A hostile medic mending a wounded ally: two soft rising notes.
+  medicHeal(graph: AudioGraph): void {
+    toneAt(graph, 'sfx', 880, 0.1, 0.07, 0);
+    toneAt(graph, 'sfx', 1175, 0.14, 0.06, 0.09);
+  },
+
+  // Aegis shield raised: four rising notes over a short hiss.
+  shield(graph: AudioGraph): void {
+    [330, 440, 660, 880].forEach((freq, i) => {
+      toneAt(graph, 'ui', freq, 0.18, 0.14, i * 0.07);
+    });
+    noise(graph, 'ui', 0.3, 1500, 0.12);
+  },
+
+  // EMP pulse: a low rumble under four falling notes.
+  emp(graph: AudioGraph): void {
+    noise(graph, 'sfx', 0.9, 600, 0.5);
+    [1400, 900, 500, 250].forEach((freq, i) => {
+      toneAt(graph, 'sfx', freq, 0.12, 0.18, i * 0.1);
+    });
+  },
+
+  // A claymore set down: two short clicks.
+  mineSet(graph: AudioGraph): void {
+    tone(graph, 'sfx', 1200, 0.05, 0.15);
+    toneAt(graph, 'sfx', 800, 0.06, 0.12, 0.07);
   },
 
   // Friendly operator rifle. allyFire() at index.html:2437.

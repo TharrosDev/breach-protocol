@@ -13,14 +13,20 @@ const SIZES = [
   { width: 390, height: 844 },
 ] as const;
 
+// A fixed local date, so the daily challenges in the screens do not change the baselines.
+const FIXED_DAY = new Date(2026, 9, 10, 12, 0, 0);
+
 const COMPARE = { maxDiffPixelRatio: 0.02, animations: 'disabled' as const, caret: 'hide' as const };
 
 // Selectors masked in the match screens.
 const MATCH_MASK = ['.hud-mm', '.hud-feed'];
 
-// Hides the 3D canvas, so the stage's solid background is what the HUD and the pause screen sit on.
+// Hides the 3D canvas, so the stage's solid background is what the HUD and the pause screen sit on. The feed is hidden
+// too: whether it holds a line (the pointer-lock notice) depends on timing, and the line moves the masks.
 async function hideMatchCanvas(page: Page): Promise<void> {
-  await page.addStyleTag({ content: '.play-canvas { visibility: hidden !important; }' });
+  await page.addStyleTag({
+    content: '.play-canvas { visibility: hidden !important; } .hud-feed { display: none !important; }',
+  });
 }
 
 // Moves the pointer off the page first, so no button shows its hover state in the shot.
@@ -40,6 +46,8 @@ for (const size of SIZES) {
     test.use({ viewport: size });
 
     test('menu, brief and loadout', async ({ page }) => {
+      // The menu lists the daily challenges, which come from the date.
+      await page.clock.setFixedTime(FIXED_DAY);
       await quietHud(page);
       await page.goto(APP_URL);
       await expect(page.getByRole('heading', { name: 'Breach Protocol' })).toBeVisible();
@@ -55,6 +63,15 @@ for (const size of SIZES) {
       await snap(page, `loadout-${tag}.png`);
     });
 
+    test('career', async ({ page }) => {
+      await page.clock.setFixedTime(FIXED_DAY);
+      await quietHud(page);
+      await page.goto(APP_URL);
+      await page.getByRole('button', { name: 'Career' }).click();
+      await expect(page.getByRole('heading', { name: 'Career' })).toBeVisible();
+      await snap(page, `career-${tag}.png`);
+    });
+
     test('settings: controls and mouse tabs', async ({ page }) => {
       await quietHud(page);
       await page.goto(APP_URL);
@@ -68,6 +85,7 @@ for (const size of SIZES) {
 
     test('pause, debrief and the in-match HUD', async ({ page }) => {
       test.setTimeout(PLAY_TIMEOUT_MS);
+      await page.clock.setFixedTime(FIXED_DAY);
       await quietHud(page);
       await page.goto(DEBUG_URL);
       await hideMatchCanvas(page);

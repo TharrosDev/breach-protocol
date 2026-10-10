@@ -3,7 +3,14 @@ import type { Rng } from '../core/rng';
 import type { DifficultyDef } from '../content/difficulty';
 import { ENEMY_DEFS, type EnemyKindId } from '../content/enemies';
 import type { Action, GadgetId } from '../content/ids';
-import { AIRSTRIKE_AIM_DIST, type KillstreakId } from '../content/killstreaks';
+import {
+  AIRSTRIKE_AIM_DIST,
+  EMP_BLIND_TIME,
+  EMP_SCAN_TIME,
+  SHIELD_DAMAGE_MUL,
+  SHIELD_TIME,
+  type KillstreakId,
+} from '../content/killstreaks';
 import { SIDEARM, type Attachment, type Perk, type WeaponDef } from '../content/weapons';
 import { RESPAWN_TIME } from '../content/tuning';
 import type { Command } from '../input/commands';
@@ -34,7 +41,15 @@ import {
 } from './health';
 import { createPlayer, stepPlayer, type PlayerState } from './movement';
 import { createOperator, killOperator, operatorAim, placeOperator, updOperator } from './squad';
-import { edgeSpawn, enemyTypeForWave, guardLayout, waveTick, type WaveState } from './waves';
+import {
+  edgeSpawn,
+  enemyTypeForWave,
+  guardLayout,
+  isJuggernautWave,
+  waveTick,
+  type WaveState,
+} from './waves';
+import { MINE_BLAST_RADIUS, placeMine, stepMines, type Mine } from './mines';
 import {
   makeWeaponState,
   startReload,
@@ -59,7 +74,7 @@ import {
 } from './killstreaks';
 import { placeSentry, stepTurrets, type Turret } from './turret';
 import { createAirstrike, stepAirstrike, type AirstrikeState } from './airstrike';
-import { createGadgetSlot, useGadget, type GadgetSlot } from './gadgets';
+import { createGadgetSlot, STIM_TIME, useGadget, type GadgetSlot } from './gadgets';
 import {
   FRAG_RADIUS,
   makeGrenade,
@@ -108,6 +123,12 @@ const GROUND_AIM_DOWN_LIMIT = -0.05;
 // index.html:473 (squad orders: 0 ATTACK, 1 HOLD, 2 FOLLOW).
 const ORDER_COUNT = 3;
 const TAU = Math.PI * 2;
+// Stim shot: ground speed multiplier and health regenerated per second while it lasts.
+const STIM_SPEED_MUL = 1.25;
+const STIM_REGEN = 6;
+// Perks: Adrenaline heals this much per kill, Scavenger returns this share of a magazine to the reserve.
+const ADRENALINE_HEAL = 15;
+const SCAVENGER_MAG_SHARE = 0.25;
 
 // A rectangle in XZ, as the building footprints of the map (legacy RECTS).
 export interface BuildingFootprint {
@@ -179,7 +200,8 @@ export type SimEvent =
   | { type: 'enemyShot'; shooter: Enemy; from: Vec3; to: Vec3; tracer: boolean; hit: boolean }
   | { type: 'operatorShot'; operator: Operator; from: Vec3; to: Vec3; enemy: Enemy | null; head: boolean }
   | { type: 'enemyHit'; enemy: Enemy; damage: number; head: boolean; by: 'player' | 'operator' }
-  | { type: 'enemyKilled'; enemy: Enemy; by: 'player' | 'operator'; head: boolean }
+  // source is the weapon id of a bullet kill, or 'melee', 'frag', 'mine', 'sentry', 'airstrike', 'breach' or 'squad'.
+  | { type: 'enemyKilled'; enemy: Enemy; by: 'player' | 'operator'; head: boolean; source: string }
   | { type: 'spotted'; by: Enemy; target: Target }
   | { type: 'playerHit'; from: Vec2; damage: number }
   | { type: 'playerDown' }
@@ -205,7 +227,13 @@ export type SimEvent =
   | { type: 'melee'; hits: number }
   // A medkit was used and restored `healed` hp. Added for the audio side.
   | { type: 'medkitUsed'; healed: number }
+  // A stim shot was used. Sounds like a medkit.
+  | { type: 'stimUsed' }
+  // A claymore was set down, or went off (the blast itself is a grenadeBlast).
+  | { type: 'mineSet'; at: Vec3 }
   | { type: 'playerFlashed'; seconds: number }
+  // A medic is mending hostiles at this spot. Sent at most every second or so per medic.
+  | { type: 'medicHeal'; at: Vec2 }
   | { type: 'matchEnd'; result: MatchResult };
 
 export type SimEvents = SimEvent[];
@@ -233,6 +261,10 @@ export class SimWorld {
   airstrikes: AirstrikeState[] = [];
   uav: UavState = { t: 0 };
   drone: DroneState | null = null;
+  // Claymore mines on the ground, seconds of Aegis shield and of stim shot left.
+  mines: Mine[] = [];
+  shieldT = 0;
+  stimT = 0;
   // Breach charges and the armed plant; resupply crates; the two loadout gadgets.
   breach: BreachState = createBreach();
   gadgets: GadgetSlot[] = [];
@@ -339,6 +371,7 @@ export class SimWorld {
     stepPlayer(p, cmd, this.collision, dt, {
       lightweight: this.opts.perk === 'lightweight',
       adsRate: this.opts.adsRate,
+      speedMul: this.stimT > 0 ? STIM_SPEED_MUL : 1,
     });
     if (cmd.pressed.has('reload') && p.alive) startReload(this.weapon, this.opts.perk);
     this.handlePresses(cmd.pressed, events);
@@ -349,7 +382,7 @@ export class SimWorld {
     const inHand = this.activeSlot;
     tickWeapon(this.primary, dt, cmd.buttons.fire && inHand === 0, this.opts.perk);
     tickWeapon(this.sidearm, dt, cmd.buttons.fire && inHand === 1, this.opts.perk);
-    const trigger = fireClick || (cmd.buttons.fire && this.weapon.def.auto);
+    const trigger = fireClick || (cmd.buttons.fire && this.weapon.def.auto) || this.weapon.burstLeft > 0;
     if (trigger && p.alive && !p.sprinting && p.sprintCool <= 0 && this.switchT <= 0) {
       const shot = tryFire(this.weapon, {
         ads: cmd.buttons.ads,
@@ -362,6 +395,12 @@ export class SimWorld {
 
     this.stepThrown(dt, events);
     this.stepBreachCharge(dt, events);
+    this.stepMineField(dt, events);
+    this.shieldT = Math.max(0, this.shieldT - dt);
+    if (this.stimT > 0) {
+      this.stimT = Math.max(0, this.stimT - dt);
+      if (p.alive) p.hp = Math.min(PLAYER_MAX_HP, p.hp + STIM_REGEN * dt);
+    }
     stepUav(this.uav, this.enemies, dt);
     if (this.drone !== null) this.drone = stepDrone(this.drone, dt, this.enemies);
     this.stepSentries(dt, events);
@@ -401,7 +440,7 @@ export class SimWorld {
     );
     if (this.wave.wave !== waveBefore)
       events.push({ type: 'wave', wave: this.wave.wave, spawned: spawnCount });
-    for (let i = 0; i < spawnCount; i++) this.spawnWaveEnemy();
+    for (let i = 0; i < spawnCount; i++) this.spawnWaveEnemy(i === 0);
 
     // Downed players bleed out; eliminated players respawn after RESPAWN_TIME (legacy index.html:2944-2950).
     if (p.downed) {
@@ -444,6 +483,9 @@ export class SimWorld {
     this.airstrikes = [];
     this.uav = { t: 0 };
     this.drone = null;
+    this.mines = [];
+    this.shieldT = 0;
+    this.stimT = 0;
     this.breach = createBreach();
     this.gadgets = this.opts.gadgets.map((id) => createGadgetSlot(id));
     this.crates = createCrates(this.opts.crates);
@@ -488,7 +530,7 @@ export class SimWorld {
       zones: this.zones,
       rng: this.rng,
       pathBudget: this.pathBudget,
-      difficulty: { dmg: this.opts.difficulty.dmg },
+      difficulty: { dmg: this.opts.difficulty.dmg, ai: this.opts.difficulty.ai },
     };
   }
 
@@ -504,6 +546,8 @@ export class SimWorld {
       this.throwGrenade(ev.from, ev.to, events);
     } else if (ev.type === 'spotted') {
       events.push({ type: 'spotted', by: ev.by, target: ev.target });
+    } else if (ev.type === 'medicHeal') {
+      events.push({ type: 'medicHeal', at: ev.at });
     }
   }
 
@@ -564,7 +608,7 @@ export class SimWorld {
     });
     if (hit === null) return;
     const dmg = OPERATOR_DAMAGE * (hit.head ? OPERATOR_HEAD_MUL : 1);
-    this.hurtEnemy(hit.enemy, dmg, hit.head, a, events);
+    this.hurtEnemy(hit.enemy, dmg, hit.head, a, 'squad', events);
   }
 
   // Player shot: recoil, then one ray per pellet (legacy fire, index.html:1809-1837).
@@ -611,7 +655,7 @@ export class SimWorld {
       return;
     }
     // Falloff and headshot multipliers from ballistics.ts (legacy index.html:1872-1876).
-    const dealt = hitDamage(this.weapon.def, hit.t, hit.head);
+    const dealt = hitDamage(this.weapon.def, hit.t, hit.head) * this.weapon.damageMul;
     events.push({
       type: 'bullet',
       from: eye,
@@ -623,7 +667,7 @@ export class SimWorld {
       damage: dealt,
     });
     this.playerHits += 1;
-    this.hurtEnemy(hit.enemy, dealt, hit.head, 'player', events);
+    this.hurtEnemy(hit.enemy, dealt, hit.head, 'player', this.weapon.def.id, events);
   }
 
   // Applies a weapon hit to a hostile. The attacker is the player or the operator who shot.
@@ -632,6 +676,7 @@ export class SimWorld {
     dmg: number,
     head: boolean,
     attacker: Operator | 'player',
+    source: string,
     events: SimEvent[],
   ): void {
     const by = attacker === 'player' ? 'player' : 'operator';
@@ -641,24 +686,31 @@ export class SimWorld {
     events.push({ type: 'enemyHit', enemy: e, damage: dmg, head, by });
     if (!r.killed) return;
     if (attacker !== 'player') attacker.kills += 1;
-    this.onEnemyKilled(e, by, head, events);
+    this.onEnemyKilled(e, by, head, source, events);
   }
 
   // Books one hostile death. Every kill costs the enemy a ticket (tickets.ts). For the player's kills, the count,
   // the score (kill 100, headshot +50) and the streak go up, and a killstreak is awarded at 3, 5 and 7 in a row.
-  private onEnemyKilled(e: Enemy, by: 'player' | 'operator', head: boolean, events: SimEvent[]): void {
+  private onEnemyKilled(
+    e: Enemy,
+    by: 'player' | 'operator',
+    head: boolean,
+    source: string,
+    events: SimEvent[],
+  ): void {
     applyKill(this.tickets);
     if (by === 'player') {
       this.playerKills += 1;
       this.streak += 1;
       this.score += KILL_SCORE + (head ? HEADSHOT_BONUS : 0);
+      this.applyKillPerk();
       const held = this.killstreak.ks;
       this.killstreak = awardKillstreak(this.killstreak, this.streak);
       if (this.killstreak.ks !== null && this.killstreak.ks !== held) {
         events.push({ type: 'killstreakEarned', id: this.killstreak.ks });
       }
     }
-    events.push({ type: 'enemyKilled', enemy: e, by, head });
+    events.push({ type: 'enemyKilled', enemy: e, by, head, source });
   }
 
   // Applies damage to the player from a hit at `from` (a hostile, a blast centre). Eliminates or downs the player
@@ -666,8 +718,9 @@ export class SimWorld {
   private damagePlayerFrom(from: Vec2, damage: number, events: SimEvent[]): void {
     const p = this.player;
     if (!p.alive || damage <= 0) return;
-    events.push({ type: 'playerHit', from: { x: from.x, z: from.z }, damage });
-    if (damagePlayer(p, damage, this.time).killed) this.onPlayerKilled(events);
+    const taken = this.shieldT > 0 ? damage * SHIELD_DAMAGE_MUL : damage;
+    events.push({ type: 'playerHit', from: { x: from.x, z: from.z }, damage: taken });
+    if (damagePlayer(p, taken, this.time).killed) this.onPlayerKilled(events);
   }
 
   // Downs the player when a squadmate is near, otherwise eliminates them (legacy killPlayer, index.html:1629-1641).
@@ -722,10 +775,18 @@ export class SimWorld {
   }
 
   // A wave spawn at the ring, heading for the nearest open zone (legacy updWaves, index.html:2379-2387).
-  private spawnWaveEnemy(): void {
+  private spawnWaveEnemy(first: boolean): void {
     const pos = edgeSpawn(this.rng, this.isOpen);
     const target = openZoneFrom(pos, this.zones);
-    const kind = enemyTypeForWave(this.wave.wave, this.rng.next());
+    let kind = enemyTypeForWave(this.wave.wave, this.rng.next());
+    // A juggernaut leads every third wave from wave 6, one at a time.
+    if (
+      first &&
+      isJuggernautWave(this.wave.wave) &&
+      !this.enemies.some((e) => e.alive && e.kind === 'juggernaut')
+    ) {
+      kind = 'juggernaut';
+    }
     this.enemies.push(
       createEnemy(kind, pos.x, pos.z, { guard: false, target }, this.rng, this.opts.difficulty),
     );
@@ -820,7 +881,7 @@ export class SimWorld {
       events.push({ type: 'playerFlashed', seconds: ev.playerFlashT });
     }
     if (ev.playerDamage > 0) this.damagePlayerFrom(ev.pos, ev.playerDamage, events);
-    for (const e of ev.enemyKills) this.onEnemyKilled(e, 'player', false, events);
+    for (const e of ev.enemyKills) this.onEnemyKilled(e, 'player', false, 'frag', events);
     for (const a of ev.operatorKills) {
       killOperator(a);
       events.push({ type: 'operatorDown', operator: a });
@@ -837,8 +898,28 @@ export class SimWorld {
     if (armed !== null) {
       events.push({ type: 'breachBlast', at: armed.point, radius: BLAST_RADIUS, box: armed.box });
     }
-    for (const e of step.enemyKills) this.onEnemyKilled(e, 'player', false, events);
+    for (const e of step.enemyKills) this.onEnemyKilled(e, 'player', false, 'breach', events);
     if (step.playerDamage > 0) this.damagePlayerFrom(this.player.pos, step.playerDamage, events);
+  }
+
+  // Claymores: armed mines blow when a hostile comes close. The blast is a grenadeBlast for the render and audio side.
+  private stepMineField(dt: number, events: SimEvent[]): void {
+    const p = this.player;
+    for (const b of stepMines(this.mines, dt, this.enemies, p.pos, p.alive)) {
+      events.push({ type: 'grenadeBlast', at: b.at, radius: MINE_BLAST_RADIUS });
+      for (const e of b.enemyKills) this.onEnemyKilled(e, 'player', false, 'mine', events);
+      if (b.playerDamage > 0) this.damagePlayerFrom(b.at, b.playerDamage, events);
+    }
+  }
+
+  // Perk effects of a player kill: Adrenaline heals, Scavenger puts ammo back in the primary's reserve.
+  private applyKillPerk(): void {
+    const p = this.player;
+    if (this.opts.perk === 'adrenaline' && p.alive) p.hp = Math.min(PLAYER_MAX_HP, p.hp + ADRENALINE_HEAL);
+    if (this.opts.perk === 'scavenger') {
+      const w = this.primary;
+      w.res = Math.min(w.def.res, w.res + Math.ceil(w.mag * SCAVENGER_MAG_SHARE));
+    }
   }
 
   // Sentry turrets fire and expire (turret.ts stepTurrets). Kills and damage go through the same bookkeeping as
@@ -850,7 +931,7 @@ export class SimWorld {
       const e = s.hitEnemy;
       if (e === null) continue;
       events.push({ type: 'enemyHit', enemy: e, damage: s.damage, head: s.head, by: 'player' });
-      if (s.killed) this.onEnemyKilled(e, 'player', s.head, events);
+      if (s.killed) this.onEnemyKilled(e, 'player', s.head, 'sentry', events);
     }
   }
 
@@ -860,7 +941,7 @@ export class SimWorld {
       const p = this.player;
       const step = stepAirstrike(s, dt, this.enemies, this.collision, this.rng, p.alive ? p.pos : null);
       for (const b of step.blasts) events.push({ type: 'airstrikeBlast', at: b.at, radius: b.radius });
-      for (const e of step.enemyKills) this.onEnemyKilled(e, 'player', false, events);
+      for (const e of step.enemyKills) this.onEnemyKilled(e, 'player', false, 'airstrike', events);
       if (step.playerDamage > 0) this.damagePlayerFrom(p.pos, step.playerDamage, events);
     }
     this.airstrikes = this.airstrikes.filter((s) => !s.done);
@@ -887,7 +968,7 @@ export class SimWorld {
     this.meleeT = MELEE_TIME;
     const hits = meleeStrike(p.pos, p.yaw, this.enemies);
     events.push({ type: 'melee', hits: hits.length });
-    for (const h of hits) this.hurtEnemy(h.enemy, h.damage, false, 'player', events);
+    for (const h of hits) this.hurtEnemy(h.enemy, h.damage, false, 'player', 'melee', events);
     alertEnemies(this.enemies, p.pos.x, p.pos.z, MELEE_ALERT_RADIUS);
   }
 
@@ -906,7 +987,16 @@ export class SimWorld {
     if (!r.used) return;
     if (r.kind === 'grenade') this.grenades.push(r.grenade);
     else if (r.kind === 'drone') this.drone = r.drone;
-    else events.push({ type: 'medkitUsed', healed: r.healed });
+    else if (r.kind === 'mine') {
+      const mine = placeMine(this.player.pos, this.aimDir(), (x, z, rad) =>
+        this.collision.pointFree(x, z, rad),
+      );
+      this.mines.push(mine);
+      events.push({ type: 'mineSet', at: mine.pos });
+    } else if (r.kind === 'stim') {
+      this.stimT = Math.max(this.stimT, STIM_TIME);
+      events.push({ type: 'stimUsed' });
+    } else events.push({ type: 'medkitUsed', healed: r.healed });
   }
 
   // Interact (legacy tryInteract, index.html:3236-3241): a resupply crate in reach takes priority, otherwise a
@@ -937,6 +1027,11 @@ export class SimWorld {
     const id = taken.id;
     if (id === 'uav') {
       this.uav = createUav();
+    } else if (id === 'shield') {
+      this.shieldT = SHIELD_TIME;
+    } else if (id === 'emp') {
+      for (const e of this.enemies) if (e.alive) e.blind = Math.max(e.blind, EMP_BLIND_TIME);
+      this.uav.t = Math.max(this.uav.t, EMP_SCAN_TIME);
     } else if (id === 'sentry') {
       const placed = placeSentry((dist) => this.groundAim(dist), this.isOpen, p.yaw);
       if (!placed.placed) {

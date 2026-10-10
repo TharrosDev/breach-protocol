@@ -3,6 +3,7 @@
 // hints).
 import type { ColourMode, HudView } from '../contracts';
 import { hasSeenIntro, markIntroSeen } from '../../persist/store';
+import type { CrosshairColour, CrosshairStyle } from '../../persist/schema';
 import {
   ANNOUNCE_SECONDS,
   FEED_LIFE_SECONDS,
@@ -95,6 +96,8 @@ export interface Hud {
   setVisible(visible: boolean): void;
   setColourMode(mode: ColourMode): void;
   showIntroHints(keys: IntroKeys): void;
+  // Crosshair shape and colour (settings).
+  setCrosshair(style: CrosshairStyle, colour: CrosshairColour): void;
   dispose(): void;
 }
 
@@ -151,6 +154,7 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
   const vignette = make('div', 'hud-fx hud-vig', root);
   const cross = make('div', 'hud-cross', root);
   for (let i = 0; i < 4; i++) make('i', '', cross);
+  make('b', 'hud-dot', cross);
   const hitMarker = make('div', 'hud-hitm', root);
   const spots = createSpotBoxes(root);
   const worldLabels: HTMLElement[] = [];
@@ -197,6 +201,7 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
   });
   const etk = make('div', 'hud-etk', top);
   etk.append('Enemy tickets');
+  const etkNum = make('b', 'hud-etk-num', etk);
   const etkFill = make('i', '', make('div', 'hud-bar hud-etk-bar', etk));
 
   // Right column: minimap, then the feed.
@@ -238,6 +243,15 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
   const breachKey = make('kbd', '', breachSlot);
   const breachText = make('b', '', breachSlot);
   const gadgetSlots: GadgetSlot[] = [];
+  const statusRow = make('div', 'hud-status', br);
+  const statusChips = (['shield', 'stim'] as const).map((id) => {
+    const node = make('div', 'hud-chip', statusRow);
+    node.dataset.status = id;
+    node.hidden = true;
+    const text = make('span', '', node);
+    const fill = make('i', '', make('div', 'hud-bar hud-chip-bar', node));
+    return { id, node, text, fill };
+  });
   const ks = make('div', 'hud-ks', br);
   const ksFill = make('i', '', make('div', 'hud-bar hud-ks-bar', br));
 
@@ -262,6 +276,8 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
   let disposed = false;
   let clock = 0;
   let hitKind: HitKind = 'hit';
+  let ticketShown = Number.NaN;
+  let lastStep = 0;
   let hitTimer = 0;
   let announceKey: string | null = null;
   let announceTimer = 0;
@@ -332,6 +348,12 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
       setStyle(z.fill, 'transform', scaleX(clamp01(state.prog)));
     });
     setStyle(etkFill, 'transform', scaleX(ticketFraction(view.tickets, view.ticketsStart)));
+    // The number eases toward the real value, so a capture that removes tickets reads as a drain.
+    ticketShown += (view.tickets - ticketShown) * Math.min(1, lastStep * 6);
+    if (Math.abs(view.tickets - ticketShown) < 0.5) ticketShown = view.tickets;
+    setText(etkNum, String(Math.round(ticketShown)));
+    setFlag(etk, 'drain', Math.round(ticketShown) !== view.tickets);
+    setFlag(etk, 'low', ticketFraction(view.tickets, view.ticketsStart) < 0.25);
   }
 
   function updateSquad(operators: readonly HudOperator[]): void {
@@ -358,6 +380,16 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
     setText(breachKey, view.breachKey);
     setText(breachText, `Breach ×${String(view.breachCharges)}`);
     setFlag(breachSlot, 'empty', view.breachCharges <= 0);
+  }
+
+  function updateStatuses(view: HudView): void {
+    for (const chip of statusChips) {
+      const s = view.statuses.find((x) => x.id === chip.id);
+      setHidden(chip.node, s === undefined);
+      if (s === undefined) continue;
+      setText(chip.text, `${s.label} ${String(Math.ceil(s.left))}s`);
+      setStyle(chip.fill, 'transform', scaleX(clamp01(s.frac)));
+    }
   }
 
   function updateKillstreak(view: HudView): void {
@@ -439,6 +471,7 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
       const item = shown[i];
       setHidden(node, item === undefined);
       if (item === undefined) return;
+      setFlag(node, 'new', item.age < 0.35);
       setText(node, item.r.key.text);
       setStyle(node, 'color', tokenVar(FEED_TOKEN[item.r.key.cls]));
       setStyle(node, 'opacity', feedFade(item.age).toFixed(3));
@@ -453,12 +486,24 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
       hitTimer = Math.max(0, hitTimer - step);
     }
     setFlag(hitMarker, 'on', hitTimer > 0);
+    setAttr(hitMarker, 'data-kind', hitKind);
+    // A fresh hit restarts the pop animation.
+    if (view.hitMarker !== 'none') {
+      hitMarker.classList.remove('pop');
+      hitMarker.getBoundingClientRect();
+      hitMarker.classList.add('pop');
+      setAttr(cross, 'data-hit', hitKind);
+    } else if (hitTimer <= 0) {
+      cross.removeAttribute('data-hit');
+    }
     setStyle(hitMarker, '--hud-hit', tokenVar(HIT_TOKEN[hitKind]));
   }
 
   function update(view: HudView, dt: number, extras: HudExtras = {}): void {
     if (disposed) return;
     const step = Number.isFinite(dt) && dt > 0 ? dt : 0;
+    lastStep = step;
+    if (Number.isNaN(ticketShown)) ticketShown = view.tickets;
     clock += step;
     const operators = extras.operators ?? [];
 
@@ -482,11 +527,14 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
     setText(hpNum, formatHealth(view.hp));
     setStyle(hpFill, 'transform', scaleX(hpFraction(view.hp)));
     setFlag(bl, 'low', isLowHealth(view.hp));
+    setFlag(root, 'hud-lowhp', isLowHealth(view.hp) && view.alive);
+    setStyle(root, '--hud-hp', hpFraction(view.hp).toFixed(3));
     setStyle(staminaFill, 'transform', scaleX(clamp01(view.stamina)));
 
     setText(weaponEl, view.weaponName);
     setText(ammoEl, formatAmmo(view.ammo, view.reserve, view.reloading));
     updateGadgets(view);
+    updateStatuses(view);
     updateKillstreak(view);
 
     updateHitMarker(view, step);
@@ -523,6 +571,10 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
     update,
     setVisible(visible) {
       root.hidden = !visible;
+    },
+    setCrosshair(style, colour) {
+      setAttr(cross, 'data-style', style);
+      setAttr(cross, 'data-col', colour);
     },
     setColourMode(mode) {
       root.dataset.colour = mode;

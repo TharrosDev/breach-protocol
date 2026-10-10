@@ -11,6 +11,19 @@ export interface QualityProfile {
   lampCount: number;
   rainOnSubstation: boolean;
   muzzleLight: boolean;
+  // Visual upgrade knobs. Low keeps every one of these cheap.
+  // Multiplier on particle counts for impacts, sparks and blood.
+  particleScale: number;
+  // Fire and smoke puffs per explosion.
+  explosionPuffs: number;
+  // Short-lived point lights for explosions.
+  dynamicLights: boolean;
+  // Floating dust and embers around the player.
+  ambientCount: number;
+  // Scattered ground detail patches and stones.
+  groundDetail: number;
+  // Additive glow around tracers and a custom grade pass.
+  glow: boolean;
 }
 
 // Legacy values from public/index.html: applyQuality (line 711-722), grass (1092), lamps (1093), rain (3156).
@@ -25,6 +38,12 @@ export const PROFILES: Record<Quality, QualityProfile> = {
     lampCount: 6,
     rainOnSubstation: true,
     muzzleLight: true,
+    particleScale: 1,
+    explosionPuffs: 16,
+    dynamicLights: true,
+    ambientCount: 140,
+    groundDetail: 140,
+    glow: true,
   },
   low: {
     shadows: false,
@@ -35,6 +54,12 @@ export const PROFILES: Record<Quality, QualityProfile> = {
     lampCount: 6,
     rainOnSubstation: false,
     muzzleLight: false,
+    particleScale: 0.5,
+    explosionPuffs: 5,
+    dynamicLights: false,
+    ambientCount: 36,
+    groundDetail: 30,
+    glow: false,
   },
 };
 

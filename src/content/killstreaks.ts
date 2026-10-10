@@ -1,7 +1,7 @@
 // Killstreak definitions and tuning, ported from the legacy game.
 // Durations for the UAV and the turret live in tuning.ts (UAV_TIME, TURRET_TIME).
 
-export const KILLSTREAK_IDS = ['uav', 'sentry', 'airstrike'] as const;
+export const KILLSTREAK_IDS = ['uav', 'shield', 'sentry', 'airstrike', 'emp'] as const;
 export type KillstreakId = (typeof KILLSTREAK_IDS)[number];
 
 export interface KillstreakDef {
@@ -23,7 +23,26 @@ export const KILLSTREAKS: Readonly<Record<KillstreakId, KillstreakDef>> = {
     desc: 'Places an auto-turret for 45 s.',
   },
   airstrike: { id: 'airstrike', streak: 7, name: 'Airstrike', desc: 'Bombs the aim point.' },
+  shield: {
+    id: 'shield',
+    streak: 4,
+    name: 'Aegis Shield',
+    desc: 'Cuts damage taken by 70% for 12 s.',
+  },
+  emp: {
+    id: 'emp',
+    streak: 9,
+    name: 'EMP Pulse',
+    desc: 'Blinds every hostile for 7 s and scans them for 6 s.',
+  },
 };
+
+// Aegis shield: seconds it lasts and the share of damage that still gets through.
+export const SHIELD_TIME = 12;
+export const SHIELD_DAMAGE_MUL = 0.3;
+// EMP pulse: seconds hostiles are blinded (they cannot fire) and seconds the scan reveals them.
+export const EMP_BLIND_TIME = 7;
+export const EMP_SCAN_TIME = 6;
 
 // index.html:2048-2052 (a UAV spot is held at least this high while it is up).
 export const UAV_SPOT_FLOOR = 0.3;

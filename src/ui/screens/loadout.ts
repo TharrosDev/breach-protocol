@@ -11,6 +11,7 @@ import {
   PERK_IDS,
   PRIMARY_WEAPON_IDS,
   type DifficultyId,
+  type PrimaryWeaponId,
   type GadgetId,
   type MapId,
 } from '../../content/ids';
@@ -19,6 +20,16 @@ import { WEAPONS } from '../../content/weapons';
 import { rovingIndex } from '../focus';
 import { saveLoadout } from '../../persist/store';
 import type { Loadout } from '../../persist/schema';
+import type { Profile } from '../../persist/profile';
+import {
+  MAX_MASTERY,
+  isUnlocked,
+  masteryFor,
+  rankFromXp,
+  unlockRank,
+  type UnlockKind,
+} from '../../content/progression';
+import { enforceUnlocks } from '../../progress/unlocks';
 import type { ScreenHandle } from '../contracts';
 import {
   ATTACHMENT_INFO,
@@ -29,7 +40,7 @@ import {
   h,
   loadoutGadgetToggle,
   navButton,
-  primaryBars,
+  weaponStatBars,
   screenRoot,
   sectionLabel,
   type FocusLike,
@@ -38,14 +49,15 @@ import {
 
 export interface LoadoutOptions {
   loadout: Loadout;
+  profile: Profile;
   onDone: () => void;
   focus?: FocusLike;
 }
 
 export interface LoadoutScreen extends ScreenHandle {
   readonly element: HTMLElement;
-  // Replaces the shown loadout (for example after the store was changed elsewhere) and redraws the selection.
-  refresh(next?: Loadout): void;
+  // Replaces the shown loadout and profile (for example after a match changed the rank) and redraws the selection.
+  refresh(next?: Loadout, profile?: Profile): void;
 }
 
 interface OptionText {
@@ -63,6 +75,8 @@ interface GroupSpec<T extends string> {
   describe: (id: T) => OptionText;
   isOn: (id: T) => boolean;
   pick: (id: T) => void;
+  // The text that says why an item cannot be picked yet, or null when it is available.
+  lock: (id: T) => string | null;
 }
 
 interface OptionGroup {
@@ -72,6 +86,7 @@ interface OptionGroup {
 
 function optionGroup<T extends string>(spec: GroupSpec<T>): OptionGroup {
   const buttons: HTMLButtonElement[] = [];
+  const lockEls: HTMLElement[] = [];
   // Index of the item with tabindex 0. Single-choice groups follow the selection. Multi groups keep the last item used.
   let stop = 0;
 
@@ -84,11 +99,15 @@ function optionGroup<T extends string>(spec: GroupSpec<T>): OptionGroup {
     const button = h('button', 'scr-opt');
     button.type = 'button';
     if (!spec.multi) button.setAttribute('role', 'radio');
-    button.append(h('b', '', info.title), h('small', '', info.sub));
+    const lockEl = h('small', 'scr-lock');
+    lockEl.hidden = true;
+    lockEls.push(lockEl);
+    button.append(h('b', '', info.title), h('small', '', info.sub), lockEl);
     if (info.extra !== undefined) button.append(info.extra);
 
     button.addEventListener('click', () => {
       stop = index;
+      if (spec.lock(id) !== null) return;
       spec.pick(id);
     });
     button.addEventListener('keydown', (event) => {
@@ -98,7 +117,8 @@ function optionGroup<T extends string>(spec: GroupSpec<T>): OptionGroup {
       const target = spec.ids[next];
       stop = next;
       buttons[next]?.focus();
-      if (!spec.multi && target !== undefined) spec.pick(target);
+      // A locked item takes focus but is not selected, so its unlock rank can be read.
+      if (!spec.multi && target !== undefined && spec.lock(target) === null) spec.pick(target);
       else sync();
     });
     buttons.push(button);
@@ -114,6 +134,15 @@ function optionGroup<T extends string>(spec: GroupSpec<T>): OptionGroup {
       const button = buttons[i];
       if (button === undefined) return;
       const on = spec.isOn(id);
+      const lock = spec.lock(id);
+      button.classList.toggle('scr-opt--locked', lock !== null);
+      if (lock !== null) button.setAttribute('aria-disabled', 'true');
+      else button.removeAttribute('aria-disabled');
+      const lockEl = lockEls[i];
+      if (lockEl !== undefined) {
+        lockEl.hidden = lock === null;
+        lockEl.textContent = lock ?? '';
+      }
       if (spec.multi) button.setAttribute('aria-pressed', String(on));
       else button.setAttribute('aria-checked', String(on));
       button.tabIndex = i === stop ? 0 : -1;
@@ -137,8 +166,14 @@ function barsNode(bars: readonly StatBar[]): HTMLElement {
 
 export function createLoadoutScreen(opts: LoadoutOptions): LoadoutScreen {
   let loadout = opts.loadout;
+  let profile = opts.profile;
   let visible = false;
   let unbindEscape: (() => void) | null = null;
+
+  const rank = (): number => rankFromXp(profile.xp).rank;
+  // The text for an item that the rank has not unlocked yet, or null.
+  const lockOf = (kind: UnlockKind, id: string): string | null =>
+    isUnlocked(kind, id, rank()) ? null : `Unlocks at rank ${String(unlockRank(kind, id))}`;
 
   const done = navButton('Done', true, '›', () => {
     opts.onDone();
@@ -146,14 +181,22 @@ export function createLoadoutScreen(opts: LoadoutOptions): LoadoutScreen {
 
   const brand = h('h1', 'scr-brand');
   brand.append('Mission ', h('br'), h('span', '', 'setup'));
+  const rankLine = h('p', 'scr-hint');
   const nav = h('nav', 'scr-nav');
   nav.setAttribute('aria-label', 'Mission setup');
   nav.append(
     brand,
     h('p', 'scr-sub', 'Choose your kit. Attachments and perks apply to your primary weapon.'),
+    rankLine,
     h('div', 'scr-grow'),
     done,
   );
+
+  // The kit summary: what the current choices do, in words.
+  const kitLines = [h('p'), h('p'), h('p'), h('p')];
+  const kit = h('div', 'scr-card scr-kit');
+  kit.setAttribute('aria-live', 'polite');
+  kit.append(...kitLines);
 
   // Commit a change: save it to bp_loadout, then redraw every group so the selection and tab stops follow it.
   function commit(): void {
@@ -169,22 +212,28 @@ export function createLoadoutScreen(opts: LoadoutOptions): LoadoutScreen {
   };
 
   const content = h('section', 'scr-content');
+  content.append(sectionLabel('Your kit'), kit);
+
+  const masteryEls = new Map<PrimaryWeaponId, HTMLElement>();
 
   addGroup({
     label: 'Primary weapon',
     columns: 2,
     multi: false,
     ids: PRIMARY_WEAPON_IDS,
-    describe: (id) => ({
-      title: WEAPONS[id].name,
-      sub: PRIMARY_DESC[id],
-      extra: barsNode(primaryBars(id)),
-    }),
+    describe: (id) => {
+      const extra = h('span', 'scr-extra');
+      const mastery = h('span', 'scr-mastery');
+      masteryEls.set(id, mastery);
+      extra.append(barsNode(weaponStatBars(id)), mastery);
+      return { title: WEAPONS[id].name, sub: PRIMARY_DESC[id], extra };
+    },
     isOn: (id) => loadout.primary === id,
     pick: (id) => {
       loadout = { ...loadout, primary: id };
       commit();
     },
+    lock: (id) => lockOf('weapon', id),
   });
 
   addGroup({
@@ -198,6 +247,7 @@ export function createLoadoutScreen(opts: LoadoutOptions): LoadoutScreen {
       loadout = { ...loadout, attachment: id };
       commit();
     },
+    lock: (id) => lockOf('attachment', id),
   });
 
   addGroup({
@@ -211,6 +261,7 @@ export function createLoadoutScreen(opts: LoadoutOptions): LoadoutScreen {
       loadout = { ...loadout, perk: id };
       commit();
     },
+    lock: (id) => lockOf('perk', id),
   });
 
   addGroup<GadgetId>({
@@ -233,6 +284,7 @@ export function createLoadoutScreen(opts: LoadoutOptions): LoadoutScreen {
       loadout = { ...loadout, gadgets: [first, second] };
       commit();
     },
+    lock: (id) => lockOf('gadget', id),
   });
 
   addGroup<MapId>({
@@ -246,6 +298,7 @@ export function createLoadoutScreen(opts: LoadoutOptions): LoadoutScreen {
       loadout = { ...loadout, map: id };
       commit();
     },
+    lock: () => null,
   });
 
   addGroup<DifficultyId>({
@@ -259,12 +312,42 @@ export function createLoadoutScreen(opts: LoadoutOptions): LoadoutScreen {
       loadout = { ...loadout, difficulty: id };
       commit();
     },
+    lock: (id) => lockOf('difficulty', id),
   });
 
   const root = screenRoot('loadout', nav, content);
 
+  function syncKit(): void {
+    const [l0, l1, l2, l3] = kitLines;
+    if (l0 === undefined || l1 === undefined || l2 === undefined || l3 === undefined) return;
+    const line = (el: HTMLElement, label: string, name: string, desc: string): void => {
+      el.replaceChildren(h('b', '', `${label}: `), `${name}. ${desc}`);
+    };
+    line(l0, 'Weapon', WEAPONS[loadout.primary].name, PRIMARY_DESC[loadout.primary]);
+    line(
+      l1,
+      'Attachment',
+      ATTACHMENT_INFO[loadout.attachment].name,
+      ATTACHMENT_INFO[loadout.attachment].desc,
+    );
+    line(l2, 'Perk', PERK_INFO[loadout.perk].name, PERK_INFO[loadout.perk].desc);
+    line(
+      l3,
+      'Gadgets',
+      loadout.gadgets.map((g) => GADGETS[g].name).join(' and '),
+      loadout.gadgets.map((g) => GADGETS[g].desc).join(' '),
+    );
+  }
+
   function syncAll(): void {
     for (const group of groups) group.sync();
+    for (const [id, el] of masteryEls) {
+      const m = masteryFor(profile.killsBySource[id] ?? 0);
+      el.textContent =
+        m.level >= MAX_MASTERY ? 'Mastered' : `Mastery ${String(m.level)} · ${String(m.kills)} kills`;
+    }
+    rankLine.textContent = `Rank ${String(rank())}. Locked items open as you rank up.`;
+    syncKit();
   }
 
   function show(): void {
@@ -287,8 +370,13 @@ export function createLoadoutScreen(opts: LoadoutOptions): LoadoutScreen {
     opts.focus?.deactivate();
   }
 
-  function refresh(next?: Loadout): void {
-    if (next !== undefined) loadout = next;
+  function refresh(next?: Loadout, nextProfile?: Profile): void {
+    if (nextProfile !== undefined) profile = nextProfile;
+    // A stored loadout can name items the rank has not unlocked. Fall back to the defaults, and save the fix.
+    if (next !== undefined) {
+      loadout = enforceUnlocks(next, rank());
+      if (JSON.stringify(loadout) !== JSON.stringify(next)) saveLoadout(loadout);
+    }
     syncAll();
   }
 

@@ -57,6 +57,14 @@ const STUCK_S = 0.7;
 const STUCK_MIN_FRAC = 0.2;
 const MOVING_EPS = 0.001;
 const ANIM_RATE = 9;
+// Hurt operators (below this share of health) break for cover, mend there, and come back after COVER_S seconds.
+const COVER_HP_FRACTION = 0.5;
+const COVER_S = 5;
+const COVER_REGEN = 6;
+const COVER_REACH = 0.8;
+const COVER_SAMPLES = 10;
+const COVER_MIN_R = 3;
+const COVER_SPAN = 5;
 
 // findPath takes a budget and may spend it itself. The budget is spent once here via take(), so
 // findPath receives a budget that always grants and the slot is not charged twice.
@@ -172,13 +180,32 @@ export function updOperator(a: Operator, w: AiWorld, dt: number, opts?: Operator
   let mv = -1;
   let speed = SPEED_ATTACK;
 
-  if (tgt !== null) {
+  // Cover: a hurt operator under fire ducks out of the target's sight and mends while it waits.
+  a.coverT = (a.coverT ?? 0) - dt;
+  if (a.coverT <= 0) a.cover = null;
+  if (tgt !== null && a.cover == null && a.coverT <= 0 && a.hp < a.maxHp * COVER_HP_FRACTION) {
+    a.cover = findOperatorCover(a, tgt, w);
+    a.coverT = COVER_S;
+  }
+  const inCover = a.cover != null && a.coverT > 0;
+  if (a.cover != null && inCover) {
+    if (Math.hypot(a.cover.x - a.pos.x, a.cover.z - a.pos.z) > COVER_REACH) {
+      mv = goTo(a, w, a.cover.x, a.cover.z, SPEED_FOLLOW, dt);
+      speed = SPEED_FOLLOW;
+    } else {
+      a.hp = Math.min(a.maxHp, a.hp + COVER_REGEN * dt);
+    }
+  }
+
+  if (inCover && tgt === null) {
+    // Wait it out behind the cover.
+  } else if (tgt !== null) {
     const dTgt = Math.hypot(tgt.pos.x - a.pos.x, tgt.pos.z - a.pos.z);
-    if (P.order === ORDER_ATTACK && dTgt > ATTACK_CLOSE_M) {
+    if (!inCover && P.order === ORDER_ATTACK && dTgt > ATTACK_CLOSE_M) {
       mv = goTo(a, w, tgt.pos.x, tgt.pos.z, SPEED_ATTACK, dt);
       speed = SPEED_ATTACK;
     }
-    if (P.order === ORDER_FOLLOW && Math.hypot(offX - a.pos.x, offZ - a.pos.z) > FOLLOW_STOP_M) {
+    if (!inCover && P.order === ORDER_FOLLOW && Math.hypot(offX - a.pos.x, offZ - a.pos.z) > FOLLOW_STOP_M) {
       mv = goTo(a, w, offX, offZ, SPEED_FOLLOW, dt);
       speed = SPEED_FOLLOW;
     }
@@ -213,6 +240,27 @@ export function updOperator(a: Operator, w: AiWorld, dt: number, opts?: Operator
   handleStuck(a, w, mv, speed, dt);
   finishMove(a, mv, dt);
   return events;
+}
+
+// The nearest walkable point 3..8 m away that the target cannot see (no clear line, or smoke in the way), or null.
+function findOperatorCover(a: Operator, target: Enemy, w: AiWorld): Vec2 | null {
+  const from: Vec3 = { x: target.pos.x, y: EYE_Y, z: target.pos.z };
+  let best: Vec2 | null = null;
+  let bestR = Infinity;
+  for (let k = 0; k < COVER_SAMPLES; k += 1) {
+    const ang = w.rng.range(0, Math.PI * 2);
+    const r = COVER_MIN_R + w.rng.range(0, COVER_SPAN);
+    const x = a.pos.x + Math.cos(ang) * r;
+    const z = a.pos.z + Math.sin(ang) * r;
+    if (!w.nav.isWalk(x, z)) continue;
+    const spot: Vec3 = { x, y: EYE_Y, z };
+    if (losClear(w.collision, from, spot) && !smokeBlocks(w.smokes, from, spot)) continue;
+    if (r < bestR) {
+      bestR = r;
+      best = { x, z };
+    }
+  }
+  return best;
 }
 
 function emptyPath(): PathState {

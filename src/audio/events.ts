@@ -13,7 +13,11 @@ export type SoundEvent =
   | { type: 'pickup'; kind: 'resupply' | 'medkit' }
   | { type: 'melee' }
   | { type: 'sentry' }
-  | { type: 'friendlyRifle' };
+  | { type: 'friendlyRifle' }
+  | { type: 'medicHeal' }
+  | { type: 'shield' }
+  | { type: 'emp' }
+  | { type: 'mineSet' };
 
 // Legacy weapon id for the Breaker Shotgun (index.html:489, checked at 1832).
 const BREAKER_WEAPON_ID = 'bk';
@@ -58,6 +62,18 @@ export function playEvent(graph: AudioGraph, ev: SoundEvent): void {
       return;
     case 'friendlyRifle':
       SFX.friendlyRifle(graph);
+      return;
+    case 'medicHeal':
+      SFX.medicHeal(graph);
+      return;
+    case 'shield':
+      SFX.shield(graph);
+      return;
+    case 'emp':
+      SFX.emp(graph);
+      return;
+    case 'mineSet':
+      SFX.mineSet(graph);
       return;
   }
 }

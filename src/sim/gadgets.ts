@@ -3,6 +3,7 @@ import { GADGETS } from '../content/gadgets';
 import type { Vec3 } from '../core/math';
 import { PLAYER_MAX_HP } from './health';
 import { launchDrone, type DroneState } from './drone';
+import { placeMine, type Mine } from './mines';
 import { playerThrow, type Grenade, type GrenadeKind } from './grenades';
 
 // Loadout gadgets: uses and the use action. Ported from the legacy game: GADGETS (index.html:511-517),
@@ -25,13 +26,20 @@ export type GadgetUse =
   | { used: false }
   | { used: true; kind: 'medkit'; healed: number }
   | { used: true; kind: 'grenade'; grenade: Grenade }
-  | { used: true; kind: 'drone'; drone: DroneState };
+  | { used: true; kind: 'drone'; drone: DroneState }
+  | { used: true; kind: 'mine'; mine: Mine }
+  | { used: true; kind: 'stim'; seconds: number };
 
 // The player fields a gadget touches. PlayerHealth and PlayerState both satisfy this.
 export interface GadgetUser {
   hp: number;
   alive: boolean;
+  // Feet position. Optional so a bare hp record still satisfies the type; a mine falls back to under the eye.
+  pos?: Vec3;
 }
+
+// Seconds a stim shot lasts.
+export const STIM_TIME = 8;
 
 // Uses the gadget in slot index (0 or 1). Ignored (used: false, nothing changes) when the player is dead, the
 // slot is empty, a medkit is used at full health, or a drone is already flying.
@@ -71,6 +79,12 @@ function applyGadget(
     case 'drone':
       if (drone !== null) return { used: false };
       return { used: true, kind: 'drone', drone: launchDrone(eye, aim) };
+    case 'claymore': {
+      const feet = player.pos ?? { x: eye.x, y: 0, z: eye.z };
+      return { used: true, kind: 'mine', mine: placeMine(feet, aim) };
+    }
+    case 'stim':
+      return { used: true, kind: 'stim', seconds: STIM_TIME };
     case 'frag':
       return throwKind('frag', eye, aim);
     case 'flash':

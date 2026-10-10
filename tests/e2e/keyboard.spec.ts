@@ -79,6 +79,19 @@ test('menu, loadout, settings, brief and launch, with the keyboard only', async 
   await expect(page.locator('.hud')).toBeVisible();
 });
 
+test('the career screen opens and closes with the keyboard', async ({ page }) => {
+  await page.goto(APP_URL);
+  await expect(page.getByRole('button', { name: 'Deploy' })).toBeFocused();
+  // Deploy, Mission setup, Settings, then Career.
+  for (let i = 0; i < 3; i++) await page.keyboard.press('Tab');
+  await expect(page.getByRole('button', { name: 'Career' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading', { name: 'Career' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Back' })).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('button', { name: 'Deploy' })).toBeFocused();
+});
+
 test('pause, settings from pause, and debrief, with the keyboard only', async ({ page }) => {
   test.setTimeout(PLAY_TIMEOUT_MS);
   await page.goto(DEBUG_URL);

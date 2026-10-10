@@ -23,6 +23,10 @@ export interface WeaponDef {
   range: number;
   adsFov: number;
   scoped: boolean;
+  // Shots per trigger pull for a burst weapon (absent or 1: single shot or full auto).
+  burst?: number;
+  // Extra seconds before the next burst may start, on top of the normal fire interval.
+  burstGap?: number;
 }
 
 // index.html:486-493. Values are copied exactly from the legacy table.
@@ -126,6 +130,68 @@ export const WEAPONS: Record<PrimaryWeaponId | typeof SIDEARM_ID, WeaponDef> = {
     range: 250,
     adsFov: 35,
     scoped: true,
+  },
+  rc: {
+    id: 'rc',
+    name: 'Ranger Carbine',
+    dmg: 26,
+    headMul: 2.4,
+    rpm: 800,
+    mag: 30,
+    res: 150,
+    reload: 2.0,
+    spread: 0.007,
+    spreadMax: 0.03,
+    gain: 0.006,
+    recoil: 0.012,
+    recoilYaw: 0.002,
+    pellets: 1,
+    auto: false,
+    range: 170,
+    adsFov: 55,
+    scoped: false,
+    burst: 3,
+    burstGap: 0.16,
+  },
+  lb: {
+    id: 'lb',
+    name: 'Longbow Sniper',
+    dmg: 110,
+    headMul: 2.5,
+    rpm: 50,
+    mag: 5,
+    res: 25,
+    reload: 3.2,
+    spread: 0.002,
+    spreadMax: 0.03,
+    gain: 0.02,
+    recoil: 0.06,
+    recoilYaw: 0.002,
+    pellets: 1,
+    auto: false,
+    range: 350,
+    adsFov: 18,
+    scoped: true,
+  },
+  hp: {
+    id: 'hp',
+    name: 'Hornet PDW',
+    dmg: 14,
+    headMul: 2.0,
+    rpm: 1000,
+    mag: 40,
+    res: 240,
+    reload: 1.6,
+    spread: 0.02,
+    spreadMax: 0.05,
+    gain: 0.002,
+    recoil: 0.0035,
+    recoilYaw: 0.003,
+    pellets: 1,
+    auto: true,
+    range: 70,
+    adsFov: 62,
+    scoped: false,
   },
   vp: {
     id: 'vp',

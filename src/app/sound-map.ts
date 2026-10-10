@@ -38,8 +38,16 @@ export function mapSimEventToSound(ev: SimEvent): SoundEvent | null {
     case 'resupplied':
       return { type: 'pickup', kind: 'resupply' };
     // useMedkit() (index.html:2007). The sim reports only uses that heal.
+    case 'stimUsed':
     case 'medkitUsed':
       return { type: 'pickup', kind: 'medkit' };
+    // A hostile medic mending an ally, a claymore set down, and the two killstreaks that were silent.
+    case 'medicHeal':
+      return { type: 'medicHeal' };
+    case 'mineSet':
+      return { type: 'mineSet' };
+    case 'killstreakUsed':
+      return ev.id === 'shield' ? { type: 'shield' } : ev.id === 'emp' ? { type: 'emp' } : null;
     // Knife swing (legacy melee, index.html:3245). Plays on every swing, hit or miss.
     case 'melee':
       return { type: 'melee' };

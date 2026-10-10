@@ -56,26 +56,80 @@ export function drawMinimap(
   ctx.clearRect(0, 0, MINIMAP_PX, MINIMAP_PX);
   ctx.drawImage(base, 0, 0);
 
+  const pulse = 0.5 + 0.5 * Math.sin(Date.now() / 220);
+
+  // Range rings centred on the player, every 20 m.
+  const ppx = worldToMap(view.playerX);
+  const ppy = worldToMap(view.playerZ);
+  ctx.strokeStyle = tokenColour(style, 'mute');
+  ctx.globalAlpha = 0.16;
+  ctx.lineWidth = 1;
+  for (const r of [20, 40]) {
+    ctx.beginPath();
+    ctx.arc(ppx, ppy, r * (MINIMAP_PX / (WORLD_HALF * 2)), 0, TAU);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // View cone: the area the player faces. Same rotation as the player arrow below.
+  if (view.alive) {
+    ctx.save();
+    ctx.translate(ppx, ppy);
+    ctx.rotate(Math.PI / 2 - view.compassYaw);
+    const cone = ctx.createRadialGradient(0, 0, 4, 0, 0, 62);
+    cone.addColorStop(0, 'rgba(255,255,255,0.28)');
+    cone.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = cone;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.arc(0, 0, 62, -0.6, 0.6);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
   marks.zones.forEach((p, i) => {
     const status = view.zones[i]?.status;
     if (status === undefined) return;
-    ctx.fillStyle = tokenColour(style, ZONE_TOKEN[status]);
+    const zx = worldToMap(p.x);
+    const zy = worldToMap(p.z);
+    const colour = tokenColour(style, ZONE_TOKEN[status]);
+    // A ring around the zone, pulsing while it is contested or being captured.
+    ctx.strokeStyle = colour;
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = status === 'contested' || status === 'capturing' ? 0.35 + pulse * 0.6 : 0.45;
     ctx.beginPath();
-    ctx.arc(worldToMap(p.x), worldToMap(p.z), ZONE_RADIUS, 0, TAU);
+    ctx.arc(zx, zy, ZONE_RADIUS + 3 + (status === 'contested' ? pulse * 3 : 0), 0, TAU);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = colour;
+    ctx.beginPath();
+    ctx.arc(zx, zy, ZONE_RADIUS, 0, TAU);
     ctx.fill();
   });
 
   ctx.fillStyle = tokenColour(style, 'friendly');
+  ctx.strokeStyle = tokenColour(style, 'panel');
+  ctx.lineWidth = 1.5;
   for (const p of marks.operators) {
     ctx.beginPath();
     ctx.arc(worldToMap(p.x), worldToMap(p.z), DOT_RADIUS, 0, TAU);
+    ctx.stroke();
     ctx.fill();
   }
 
   ctx.fillStyle = tokenColour(style, 'hostile');
+  ctx.strokeStyle = tokenColour(style, 'hostile');
   for (const s of view.spotted) {
+    const sx = worldToMap(s.x);
+    const sy = worldToMap(s.z);
+    ctx.globalAlpha = 0.25 + pulse * 0.4;
     ctx.beginPath();
-    ctx.arc(worldToMap(s.x), worldToMap(s.z), DOT_RADIUS, 0, TAU);
+    ctx.arc(sx, sy, DOT_RADIUS + 2 + pulse * 2, 0, TAU);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    ctx.arc(sx, sy, DOT_RADIUS, 0, TAU);
     ctx.fill();
   }
 

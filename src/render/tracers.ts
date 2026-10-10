@@ -48,8 +48,15 @@ export class TracerPool {
 }
 
 // One Line per live tracer. Each line is removed and disposed on expiry.
-export function buildTracerMeshes(scene: THREE.Scene, pool: TracerPool): { sync(): void; dispose(): void } {
+export function buildTracerMeshes(
+  scene: THREE.Scene,
+  pool: TracerPool,
+  glow = false,
+): { sync(): void; dispose(): void } {
   const lines = new Map<object, THREE.Line>();
+  const glows = new Map<object, THREE.Mesh>();
+  const glowGeo = new THREE.BoxGeometry(1, 1, 1);
+  glowGeo.translate(0, 0, -0.5);
 
   const removeLine = (line: THREE.Line): void => {
     scene.remove(line);
@@ -64,9 +71,18 @@ export function buildTracerMeshes(scene: THREE.Scene, pool: TracerPool): { sync(
         if (!live.has(tracer)) {
           removeLine(line);
           lines.delete(tracer);
+          const gm = glows.get(tracer);
+          if (gm) {
+            scene.remove(gm);
+            (gm.material as THREE.Material).dispose();
+            glows.delete(tracer);
+          }
         }
       }
       for (const tracer of pool.items) {
+        const gm0 = glows.get(tracer);
+        if (gm0)
+          (gm0.material as THREE.MeshBasicMaterial).opacity = 0.5 * Math.min(1, tracer.life / TRACER_LIFE);
         if (lines.has(tracer)) continue;
         const geometry = new THREE.BufferGeometry().setFromPoints([
           new THREE.Vector3(tracer.start.x, tracer.start.y, tracer.start.z),
@@ -80,11 +96,37 @@ export function buildTracerMeshes(scene: THREE.Scene, pool: TracerPool): { sync(
         const line = new THREE.Line(geometry, material);
         scene.add(line);
         lines.set(tracer, line);
+        if (glow) {
+          const a = new THREE.Vector3(tracer.start.x, tracer.start.y, tracer.start.z);
+          const b = new THREE.Vector3(tracer.end.x, tracer.end.y, tracer.end.z);
+          const gm = new THREE.Mesh(
+            glowGeo,
+            new THREE.MeshBasicMaterial({
+              color: tracer.color,
+              transparent: true,
+              opacity: 0.5,
+              blending: THREE.AdditiveBlending,
+              depthWrite: false,
+              fog: false,
+            }),
+          );
+          gm.position.copy(a);
+          gm.lookAt(b);
+          gm.scale.set(0.035, 0.035, a.distanceTo(b));
+          scene.add(gm);
+          glows.set(tracer, gm);
+        }
       }
     },
     dispose(): void {
       for (const line of lines.values()) removeLine(line);
       lines.clear();
+      for (const gm of glows.values()) {
+        scene.remove(gm);
+        (gm.material as THREE.Material).dispose();
+      }
+      glows.clear();
+      glowGeo.dispose();
     },
   };
 }

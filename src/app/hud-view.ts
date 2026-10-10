@@ -9,9 +9,10 @@ import { scoreboardFooter, type FeedCls } from '../ui/hud/layout';
 import { ENEMY_DEFS } from '../content/enemies';
 import type { Action } from '../content/ids';
 import { GADGETS } from '../content/gadgets';
-import { KILLSTREAKS, KILLSTREAK_IDS, type KillstreakId } from '../content/killstreaks';
+import { KILLSTREAKS, KILLSTREAK_IDS, SHIELD_TIME, type KillstreakId } from '../content/killstreaks';
 import { ANNOUNCE_SECONDS } from '../ui/hud/layout';
 import { PLANT_REACH } from '../sim/breach';
+import { STIM_TIME } from '../sim/gadgets';
 import { readyLabel } from '../sim/killstreaks';
 import { nearestCrate } from '../sim/resupply';
 import type { SimWorld } from '../sim/world';
@@ -149,6 +150,23 @@ export function promptFor(sim: SimWorld, env: HudEnv): string {
   return '';
 }
 
+// The timed effects running on the player: the Aegis shield and the stim shot.
+export function statusesFor(sim: SimWorld): HudView['statuses'] {
+  const out: HudView['statuses'] = [];
+  if (sim.shieldT > 0) {
+    out.push({
+      id: 'shield',
+      label: 'Aegis shield',
+      left: sim.shieldT,
+      frac: Math.min(1, sim.shieldT / SHIELD_TIME),
+    });
+  }
+  if (sim.stimT > 0) {
+    out.push({ id: 'stim', label: 'Stim shot', left: sim.stimT, frac: Math.min(1, sim.stimT / STIM_TIME) });
+  }
+  return out;
+}
+
 // Builds the HUD view from the sim and the render-side messages. Reads only.
 export function buildHudView(sim: SimWorld, env: HudEnv, state: HudState): HudView {
   const p = sim.player;
@@ -191,6 +209,7 @@ export function buildHudView(sim: SimWorld, env: HudEnv, state: HudState): HudVi
     hurt: Math.min(1, Math.max(0, 1 - sinceHurt / HURT_SECONDS)),
     hitMarker: state.takeHit(),
     feed: state.feedLines(),
+    statuses: statusesFor(sim),
     prompt: promptFor(sim, env),
     announce: state.bannerNow(),
     compassYaw: p.yaw,
@@ -268,4 +287,6 @@ export const KILLSTREAK_USED: Readonly<Record<KillstreakId, { feed: string; bann
     uav: { feed: 'UAV online: hostiles revealed', banner: 'UAV ONLINE', sub: 'all hostiles revealed' },
     sentry: { feed: 'Sentry turret online', banner: 'SENTRY ONLINE', sub: '' },
     airstrike: { feed: 'Airstrike inbound', banner: 'AIRSTRIKE', sub: '' },
+    shield: { feed: 'Aegis shield up: damage reduced', banner: 'AEGIS SHIELD', sub: '70% damage reduction' },
+    emp: { feed: 'EMP pulse: hostiles blinded', banner: 'EMP PULSE', sub: 'hostiles blinded and scanned' },
   };

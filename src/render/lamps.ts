@@ -51,7 +51,7 @@ export function buildLamps(
   count: number,
   world: CollisionWorld,
   zones: readonly ZoneCentre[],
-): { meshes: THREE.Object3D[]; dispose(): void } {
+): { meshes: THREE.Object3D[]; update(time: number): void; dispose(): void } {
   const sites = lampPlacements(rng, count, world, zones);
 
   const headGeo = new THREE.BoxGeometry(0.5, 0.1, 0.35);
@@ -59,6 +59,21 @@ export function buildLamps(
     color: 0x222222,
     emissive: 0xffd9a0,
     emissiveIntensity: 2.2,
+  });
+  const poleGeo = new THREE.CylinderGeometry(0.07, 0.11, POLE_HEIGHT, 8);
+  const poleMat = new THREE.MeshStandardMaterial({ color: 0x3a3f45, roughness: 0.5, metalness: 0.7 });
+  const armGeo = new THREE.BoxGeometry(0.12, 0.08, 0.6);
+  const baseGeo = new THREE.CylinderGeometry(0.2, 0.25, 0.3, 8);
+  const beamGeo = new THREE.ConeGeometry(2.4, 4.1, 16, 1, true);
+  beamGeo.translate(0, -2.05, 0);
+  const beamMat = new THREE.MeshBasicMaterial({
+    color: 0xffd9a0,
+    transparent: true,
+    opacity: 0.045,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    side: THREE.DoubleSide,
+    fog: false,
   });
   const glowTex = makeGlowTexture();
   const glowMat = new THREE.SpriteMaterial({
@@ -82,19 +97,45 @@ export function buildLamps(
     const glow = new THREE.Sprite(glowMat);
     glow.position.set(x, GLOW_Y, z);
     glow.scale.setScalar(GLOW_SCALE);
-    scene.add(head, glow);
-    meshes.push(head, glow);
+    const pole = new THREE.Mesh(poleGeo, poleMat);
+    pole.position.set(x, POLE_HEIGHT / 2, z);
+    pole.castShadow = true;
+    const base = new THREE.Mesh(baseGeo, poleMat);
+    base.position.set(x, 0.15, z);
+    const arm = new THREE.Mesh(armGeo, poleMat);
+    arm.position.set(x, HEAD_Y - 0.05, z);
+    const beam = new THREE.Mesh(beamGeo, beamMat);
+    beam.position.set(x, HEAD_Y - 0.1, z);
+    scene.add(head, glow, pole, base, arm, beam);
+    meshes.push(head, glow, pole, base, arm, beam);
   }
 
   let disposed = false;
   return {
     meshes,
+    update(time: number): void {
+      // A faint electrical flicker on the lamp heads, the glow and the light cone together.
+      const f =
+        1 +
+        Math.sin(time * 37) * 0.025 +
+        Math.sin(time * 11.3) * 0.03 +
+        (Math.sin(time * 3.1) > 0.985 ? -0.25 : 0);
+      headMat.emissiveIntensity = 2.2 * f;
+      glowMat.opacity = Math.min(1, f);
+      beamMat.opacity = 0.045 * f;
+    },
     dispose(): void {
       if (disposed) return;
       disposed = true;
       for (const id of poleIds) world.remove(id);
       for (const m of meshes) scene.remove(m);
       headGeo.dispose();
+      poleGeo.dispose();
+      poleMat.dispose();
+      armGeo.dispose();
+      baseGeo.dispose();
+      beamGeo.dispose();
+      beamMat.dispose();
       headMat.dispose();
       glowMat.dispose();
       glowTex.dispose();
