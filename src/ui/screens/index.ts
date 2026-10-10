@@ -12,6 +12,7 @@ export {
   type SettingsScreen,
 } from './settings';
 export { createPauseScreen, type PauseOptions, type PauseScreen } from './pause';
+export { createCareerScreen, type CareerOptions, type CareerScreen } from './career';
 export { createDebriefScreen, type DebriefOptions, type DebriefScreen } from './debrief';
 
 export {

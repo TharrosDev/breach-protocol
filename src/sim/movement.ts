@@ -58,6 +58,8 @@ export interface StepOptions {
   // ADS blend rate per second. Legacy index.html:1728 uses 17 with Reflex and 12 otherwise.
   // Defaults to 17, the Reflex value that the default loadout uses.
   adsRate?: number;
+  // Multiplier on ground speed (stim shot). Defaults to 1.
+  speedMul?: number;
 }
 
 // index.html:1754. Ground control 10 and air control 3.5 are blend rates per second.
@@ -263,7 +265,7 @@ export function stepPlayer(
           ? SPRINT_SPEED_LIGHTWEIGHT
           : SPRINT_SPEED
         : WALK_SPEED;
-    speed *= 1 - p.adsT * ADS_SLOW;
+    speed *= (1 - p.adsT * ADS_SLOW) * (opts.speedMul ?? 1);
     const ac = p.onGround ? GROUND_CONTROL : AIR_CONTROL;
     p.vel.x += (mx * speed * alive - p.vel.x) * Math.min(1, dt * ac);
     p.vel.z += (mz * speed * alive - p.vel.z) * Math.min(1, dt * ac);

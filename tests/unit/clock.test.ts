@@ -23,6 +23,16 @@ describe('FixedStep', () => {
     expect(clock.advance(1)).toBe(15);
   });
 
+  it('never runs more than maxSteps in a frame and drops the backlog instead of carrying it', () => {
+    const clock = new FixedStep(60, 0.25, 5);
+    expect(clock.advance(0.25)).toBe(5);
+    // The 10 steps that did not run are gone: the next normal frame is a normal frame.
+    expect(clock.advance(1 / 60)).toBe(1);
+    expect(clock.dropped).toBeCloseTo(10 / 60, 9);
+    expect(clock.alpha).toBeGreaterThanOrEqual(0);
+    expect(clock.alpha).toBeLessThan(1);
+  });
+
   it('keeps alpha in [0, 1) across a varied frame sequence', () => {
     const clock = new FixedStep(60);
     const frames = [0.001, 0.0167, 0.05, 1, 0, 0.0333, 0.25, 1 / 120, 0.4, 0.0041];

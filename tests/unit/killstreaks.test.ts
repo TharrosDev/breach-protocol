@@ -59,14 +59,16 @@ function makeEnemy(kind: EnemyKindId, x: number, z: number, alive = true): Enemy
 const EMPTY: KillstreakSlot = { ks: null, ksUsed: 0 };
 
 describe('checkStreakAward', () => {
-  it('awards uav at 3, sentry at 5 and airstrike at 7', () => {
+  it('awards uav at 3, shield at 4, sentry at 5, airstrike at 7 and emp at 9', () => {
+    expect(checkStreakAward(4)).toBe('shield');
+    expect(checkStreakAward(9)).toBe('emp');
     expect(checkStreakAward(3)).toBe('uav');
     expect(checkStreakAward(5)).toBe('sentry');
     expect(checkStreakAward(7)).toBe('airstrike');
   });
 
   it('awards nothing at other streak counts', () => {
-    for (const n of [0, 1, 2, 4, 6, 8, 9, 10]) {
+    for (const n of [0, 1, 2, 6, 8, 10, 11]) {
       expect(checkStreakAward(n)).toBeNull();
     }
   });
@@ -91,7 +93,7 @@ describe('killstreak slot', () => {
   });
 
   it('ignores a streak count that awards nothing', () => {
-    expect(awardKillstreak(EMPTY, 4)).toEqual(EMPTY);
+    expect(awardKillstreak(EMPTY, 6)).toEqual(EMPTY);
   });
 
   it('takes the held killstreak without changing the slot', () => {

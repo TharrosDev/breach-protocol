@@ -10,7 +10,7 @@ export type {
   GainNodeLike,
   OscillatorLike,
 } from './graph';
-export { noise, tone, SFX } from './synth';
+export { noise, tone, toneAt, SFX } from './synth';
 export { playEvent } from './events';
 export type { SoundEvent } from './events';
 

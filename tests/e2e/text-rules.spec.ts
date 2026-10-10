@@ -83,6 +83,11 @@ for (const size of SIZES) {
       expect(await violations(page), 'loadout').toEqual([]);
       await page.keyboard.press('Escape');
 
+      await page.getByRole('button', { name: 'Career' }).click();
+      await expect(page.getByRole('heading', { name: 'Career' })).toBeVisible();
+      expect(await violations(page), 'career').toEqual([]);
+      await page.keyboard.press('Escape');
+
       await page.getByRole('button', { name: 'Settings' }).click();
       for (const tab of ['Controls', 'Mouse', 'Display', 'Audio']) {
         await page.getByRole('tab', { name: tab }).click();

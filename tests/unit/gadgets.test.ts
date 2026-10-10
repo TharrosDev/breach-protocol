@@ -59,7 +59,7 @@ function alivePlayer(hp = 100): GadgetUser {
 
 describe('gadget definitions', () => {
   it('matches the legacy uses and names', () => {
-    expect(GADGET_IDS).toEqual(['frag', 'flash', 'smoke', 'medkit', 'drone']);
+    expect(GADGET_IDS).toEqual(['frag', 'flash', 'smoke', 'medkit', 'drone', 'claymore', 'stim']);
     expect(GADGETS.frag).toMatchObject({ name: 'Frag', uses: 2 });
     expect(GADGETS.flash).toMatchObject({ name: 'Flashbang', uses: 2 });
     expect(GADGETS.smoke).toMatchObject({ name: 'Smoke', uses: 2 });

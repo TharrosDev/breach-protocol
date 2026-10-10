@@ -95,6 +95,9 @@ export const PRIMARY_DESC: Readonly<Record<PrimaryWeaponId, string>> = {
   bk: 'Devastating up close',
   lm: 'Huge magazine, slow reload',
   dm: 'Precision semi-auto, scoped',
+  rc: 'Three-round burst carbine, accurate',
+  lb: 'Bolt-action sniper, one shot one kill',
+  hp: 'Compact PDW, fastest fire, low recoil',
 };
 
 // index.html:496-502
@@ -104,6 +107,8 @@ export const ATTACHMENT_INFO: Readonly<Record<AttachmentId, NamedText>> = {
   extmag: { name: 'Extended mag', desc: '+50% magazine capacity.' },
   grip: { name: 'Vertical grip', desc: '30% less recoil.' },
   reflex: { name: 'Reflex optic', desc: 'Tighter spread and faster aim-down-sights.' },
+  compensator: { name: 'Compensator', desc: '25% less recoil and slower spread bloom.' },
+  hollow: { name: 'Hollow points', desc: '+20% damage, 25% less reserve ammo.' },
 };
 
 // index.html:504-509
@@ -112,6 +117,8 @@ export const PERK_INFO: Readonly<Record<PerkId, NamedText>> = {
   fasthands: { name: 'Fast Hands', desc: 'Reloads 30% faster.' },
   lightweight: { name: 'Lightweight', desc: 'Faster sprint, stamina drains slower.' },
   ghost: { name: 'Ghost', desc: 'Enemies spot you from 30% less far away.' },
+  scavenger: { name: 'Scavenger', desc: 'Kills drop ammo back into your reserve.' },
+  adrenaline: { name: 'Adrenaline', desc: 'Each kill restores 15 health.' },
 };
 
 // Legacy stat bars (index.html:2716-2721): each value is divided by a scale and capped at 100.
@@ -122,6 +129,23 @@ export function primaryBars(id: PrimaryWeaponId): StatBar[] {
     { label: 'Rate', pct: Math.min(100, w.rpm / 9) },
     { label: 'Magazine', pct: Math.min(100, w.mag / 0.9) },
     { label: 'Range', pct: Math.min(100, w.range / 2.5) },
+  ];
+}
+
+// The loadout screen's bars: what a weapon does per trigger pull, how fast it fires, how far it reaches and how
+// controllable it is. Control falls with recoil, yaw kick and spread. A shotgun's pellets count at 45% (they rarely
+// all land). Every value is 0..100.
+export function weaponStatBars(id: PrimaryWeaponId): StatBar[] {
+  const w = WEAPONS[id];
+  const perPull = w.dmg * (w.pellets > 1 ? w.pellets * 0.45 : 1);
+  const control = 100 - Math.min(95, w.recoil * 1100 + w.recoilYaw * 2500 + w.spread * 700);
+  const clampPct = (v: number): number => Math.max(0, Math.min(100, v));
+  return [
+    { label: 'Damage', pct: clampPct(100 * (perPull / 110) ** 0.7) },
+    { label: 'Rate', pct: clampPct(w.rpm / 10) },
+    { label: 'Range', pct: clampPct(w.range / 3.5) },
+    { label: 'Control', pct: clampPct(control) },
+    { label: 'Magazine', pct: clampPct(w.mag / 0.9) },
   ];
 }
 
@@ -187,6 +211,26 @@ export function controlRows(b: BindingMap, keyName: (code: string) => string): C
     { keys: [k('scoreboard')], text: 'Scoreboard' },
   ];
 }
+
+// The gamepad layout (src/input/gamepad.ts), as shown on the settings screen.
+export const PAD_ROWS: readonly ControlRow[] = [
+  { keys: ['LS'], text: 'Move' },
+  { keys: ['RS'], text: 'Look' },
+  { keys: ['RT'], text: 'Fire' },
+  { keys: ['LT'], text: 'Aim down sights' },
+  { keys: ['A'], text: 'Jump or vault' },
+  { keys: ['B'], text: 'Crouch (hold)' },
+  { keys: ['L3'], text: 'Sprint (hold)' },
+  { keys: ['X'], text: 'Reload' },
+  { keys: ['Y'], text: 'Swap weapon' },
+  { keys: ['LB', 'RB'], text: 'Gadget slot 1 / slot 2' },
+  { keys: ['R3'], text: 'Melee knife' },
+  { keys: ['D-pad up'], text: 'Use a stored killstreak' },
+  { keys: ['D-pad left'], text: 'Squad order' },
+  { keys: ['D-pad right'], text: 'Resupply or place a breach charge' },
+  { keys: ['D-pad down'], text: 'Scoreboard (hold)' },
+  { keys: ['Start'], text: 'Pause' },
+];
 
 // The brief's win conditions (index.html:3313).
 export function winConditionText(zones: number, tickets: number, lives: number, zoneCost: number): string {
@@ -273,6 +317,21 @@ export function tileNode(title: string, sub: string): HTMLElement {
   const tile = h('div', 'scr-tile');
   tile.append(h('b', '', title), h('small', '', sub));
   return tile;
+}
+
+// A progress bar. The fill width is a percentage, and the track is a progressbar for assistive tech.
+export function barNode(fraction: number, label: string, className = 'scr-bar'): HTMLElement {
+  const pct = Math.round(Math.max(0, Math.min(1, fraction)) * 100);
+  const track = h('div', className);
+  track.setAttribute('role', 'progressbar');
+  track.setAttribute('aria-label', label);
+  track.setAttribute('aria-valuemin', '0');
+  track.setAttribute('aria-valuemax', '100');
+  track.setAttribute('aria-valuenow', String(pct));
+  const fill = h('i');
+  fill.style.width = `${String(pct)}%`;
+  track.append(fill);
+  return track;
 }
 
 // Section label. Uppercase is allowed here because every label is three words or fewer (see screens.css).

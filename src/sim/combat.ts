@@ -27,8 +27,6 @@ const HIT_BODY_Y = 0.95;
 const HIT_HEAD_Y = 1.6;
 const HIT_BODY_R = 0.42;
 const HIT_HEAD_R = 0.2;
-// index.html:2518-2551 (heavies take 60% damage to the body; the head is not reduced).
-const HEAVY_BODY_MULT = 0.6;
 const ENEMY_DEATH_T = 4;
 const FLINCH_T = 0.12;
 // Score for a player kill and the headshot bonus (index.html:2531-2535).
@@ -72,8 +70,10 @@ export function nearestEnemyHit(
   let bt = maxT;
   for (const enemy of enemies) {
     if (!enemy.alive) continue;
-    const tb = raySphere(o, dir, { x: enemy.pos.x, y: HIT_BODY_Y, z: enemy.pos.z }, HIT_BODY_R);
-    const th = raySphere(o, dir, { x: enemy.pos.x, y: HIT_HEAD_Y, z: enemy.pos.z }, HIT_HEAD_R);
+    // Big hostiles (the juggernaut) have proportionally bigger hit spheres.
+    const sc = ENEMY_DEFS[enemy.kind].scale;
+    const tb = raySphere(o, dir, { x: enemy.pos.x, y: HIT_BODY_Y * sc, z: enemy.pos.z }, HIT_BODY_R * sc);
+    const th = raySphere(o, dir, { x: enemy.pos.x, y: HIT_HEAD_Y * sc, z: enemy.pos.z }, HIT_HEAD_R * sc);
     const t = Math.min(tb, th);
     if (t < bt) {
       bt = t;
@@ -149,7 +149,8 @@ export interface EnemyDamageResult {
   headshot: boolean;
 }
 
-// Applies damage to a hostile. Heavies take 60% of non-head damage (index.html:2521).
+// Applies damage to a hostile. Armoured kinds take a share of non-head damage: heavies 60% (index.html:2521),
+// juggernauts 45%.
 // Streak, multi-kill and feed logic stays with the caller; this returns the data it needs.
 export function damageEnemy(
   e: Enemy,
@@ -158,7 +159,7 @@ export function damageEnemy(
   by: 'player' | 'operator',
 ): EnemyDamageResult {
   if (!e.alive) return { killed: false, scoreDelta: 0, ticketDelta: 0, headshot: false };
-  const scaled = !head && ENEMY_DEFS[e.kind].heavy ? dmg * HEAVY_BODY_MULT : dmg;
+  const scaled = head ? dmg : dmg * ENEMY_DEFS[e.kind].armor;
   e.hp -= scaled;
   e.flinchT = FLINCH_T;
   e.state = 'hunt';

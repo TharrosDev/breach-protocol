@@ -1,5 +1,6 @@
 import type { Action } from '../content/ids';
 import { Bindings } from '../input/bindings';
+import { sanitizeProfile, type Profile } from './profile';
 import { sanitizeLoadout, sanitizeSettings, type Loadout, type Settings } from './schema';
 
 // Same keys as the legacy file (index.html). Changing one would drop existing players' data.
@@ -8,6 +9,7 @@ export const STORAGE_KEYS = {
   loadout: 'bp_loadout',
   bindings: 'bp_binds',
   intro: 'bp_intro',
+  profile: 'bp_profile',
 } as const;
 
 // Looked up at call time, never at module load. Accessing localStorage can throw (blocked site data).
@@ -56,6 +58,14 @@ export function loadLoadout(storage?: Storage): Loadout {
 
 export function saveLoadout(l: Loadout, storage?: Storage): void {
   writeJson(STORAGE_KEYS.loadout, sanitizeLoadout(l), storage);
+}
+
+export function loadProfile(storage?: Storage): Profile {
+  return sanitizeProfile(readJson(STORAGE_KEYS.profile, storage));
+}
+
+export function saveProfile(p: Profile, storage?: Storage): void {
+  writeJson(STORAGE_KEYS.profile, sanitizeProfile(p), storage);
 }
 
 export function loadBindings(storage?: Storage): Record<Action, string> {

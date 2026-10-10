@@ -64,12 +64,12 @@ describe('hemisphere intensity', () => {
 });
 
 describe('quality profiles used by the match', () => {
-  it('High gives grass 900 with shadows, post and a pixel ratio capped at 2', () => {
+  it('High gives grass 900 with shadows, post and a pixel ratio capped at 1.5', () => {
     const p = profileFor('high', 3);
     expect(p.grassCount).toBe(900);
     expect(p.shadows).toBe(true);
     expect(p.post).toBe(true);
-    expect(p.pixelRatioCap).toBe(2);
+    expect(p.pixelRatioCap).toBe(1.5);
     expect(p.muzzleLight).toBe(true);
   });
 

@@ -5,12 +5,14 @@
   "scripts": {
     "test": "vitest run",
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "build": "npm run typecheck && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit",
-    "lint": "eslint .",
+    "typecheck": "tsc --noEmit --incremental --tsBuildInfoFile node_modules/.cache/tsc.tsbuildinfo",
+    "lint": "eslint . --cache --cache-location node_modules/.cache/eslint",
     "format": "prettier --check .",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test --project=chromium",
+    "build:fast": "vite build",
+    "test:e2e:all": "playwright test"
   },
   "repository": {
     "type": "git",

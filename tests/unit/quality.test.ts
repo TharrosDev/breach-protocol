@@ -5,13 +5,21 @@ describe('quality profiles', () => {
   it('High matches the legacy values', () => {
     expect(PROFILES.high).toEqual({
       shadows: true,
-      pixelRatioCap: 2,
+      pixelRatioCap: 1.5,
       post: true,
       hemiIntensity: 0.55,
       grassCount: 900,
       lampCount: 6,
       rainOnSubstation: true,
       muzzleLight: true,
+      particleScale: 1,
+      explosionPuffs: 16,
+      dynamicLights: true,
+      ambientCount: 140,
+      groundDetail: 140,
+      glow: true,
+      shadowEvery: 2,
+      bloomScale: 0.5,
     });
   });
 
@@ -25,12 +33,22 @@ describe('quality profiles', () => {
       lampCount: 6,
       rainOnSubstation: false,
       muzzleLight: false,
+      particleScale: 0.5,
+      explosionPuffs: 5,
+      dynamicLights: false,
+      ambientCount: 36,
+      groundDetail: 30,
+      glow: false,
+      shadowEvery: 1,
+      bloomScale: 1,
     });
   });
 
-  it('caps the pixel ratio at 2 on High', () => {
-    expect(profileFor('high', 3).pixelRatioCap).toBe(2);
+  it('caps the pixel ratio at 1.5 on High', () => {
+    expect(profileFor('high', 3).pixelRatioCap).toBe(1.5);
+    expect(profileFor('high', 2).pixelRatioCap).toBe(1.5);
     expect(profileFor('high', 1.5).pixelRatioCap).toBe(1.5);
+    expect(profileFor('high', 1.25).pixelRatioCap).toBe(1.25);
     expect(profileFor('high', 1).pixelRatioCap).toBe(1);
   });
 
@@ -40,7 +58,7 @@ describe('quality profiles', () => {
   });
 
   it('keeps the other fields of the tier', () => {
-    expect(profileFor('high', 2)).toEqual({ ...PROFILES.high, pixelRatioCap: 2 });
+    expect(profileFor('high', 2)).toEqual({ ...PROFILES.high, pixelRatioCap: 1.5 });
     expect(profileFor('low', 2)).toEqual(PROFILES.low);
   });
 });

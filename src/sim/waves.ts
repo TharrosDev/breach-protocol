@@ -21,12 +21,22 @@ const TAU = Math.PI * 2;
 // Legacy resetMatch defender order (index.html:2630).
 const GUARD_KINDS: readonly EnemyKindId[] = ['rifle', 'sniper', 'heavy', 'grenadier'];
 
-// index.html:2358-2364. `roll` is a uniform draw in [0, 1) supplied by the caller.
+// index.html:2358-2364, extended with the rusher (wave 2+, rolls 0.72-0.9) and the medic (wave 3+, rolls from 0.9).
+// `roll` is a uniform draw in [0, 1) supplied by the caller. The legacy bands below 0.5 are unchanged.
 export function enemyTypeForWave(wave: number, roll: number): EnemyKindId {
   if (wave >= 4 && roll < 0.18) return 'grenadier';
   if (wave >= 2 && roll < 0.3) return 'sniper';
   if (wave >= 3 && roll < 0.5) return 'heavy';
+  if (wave >= 3 && roll >= 0.9) return 'medic';
+  if (wave >= 2 && roll >= 0.72 && roll < 0.9) return 'rusher';
   return 'rifle';
+}
+
+// First juggernaut arrives on wave 6, then every third wave (9, 12, ...). One at a time.
+export const JUGGERNAUT_FIRST_WAVE = 6;
+export const JUGGERNAUT_EVERY = 3;
+export function isJuggernautWave(wave: number): boolean {
+  return wave >= JUGGERNAUT_FIRST_WAVE && (wave - JUGGERNAUT_FIRST_WAVE) % JUGGERNAUT_EVERY === 0;
 }
 
 // index.html:2379 (count after the wave counter is incremented).

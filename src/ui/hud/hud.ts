@@ -3,6 +3,7 @@
 // hints).
 import type { ColourMode, HudView } from '../contracts';
 import { hasSeenIntro, markIntroSeen } from '../../persist/store';
+import type { CrosshairColour, CrosshairStyle } from '../../persist/schema';
 import {
   ANNOUNCE_SECONDS,
   FEED_LIFE_SECONDS,
@@ -95,6 +96,8 @@ export interface Hud {
   setVisible(visible: boolean): void;
   setColourMode(mode: ColourMode): void;
   showIntroHints(keys: IntroKeys): void;
+  // Crosshair shape and colour (settings).
+  setCrosshair(style: CrosshairStyle, colour: CrosshairColour): void;
   dispose(): void;
 }
 
@@ -114,6 +117,8 @@ const COMPASS_LABELS: readonly { readonly text: string; readonly angle: number }
 ];
 // Legacy intro hint timing (index.html:3402-3417): the first hint now, the next two after 6 s and 12 s.
 const HINT_FIRST_MS = 5500;
+// The slow HUD panels refresh this often (ms).
+const SLOW_INTERVAL_MS = 66;
 const HINT_SECOND_AT_MS = 6000;
 const HINT_SECOND_MS = 5000;
 const HINT_THIRD_AT_MS = 12000;
@@ -151,6 +156,7 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
   const vignette = make('div', 'hud-fx hud-vig', root);
   const cross = make('div', 'hud-cross', root);
   for (let i = 0; i < 4; i++) make('i', '', cross);
+  make('b', 'hud-dot', cross);
   const hitMarker = make('div', 'hud-hitm', root);
   const spots = createSpotBoxes(root);
   const worldLabels: HTMLElement[] = [];
@@ -197,6 +203,7 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
   });
   const etk = make('div', 'hud-etk', top);
   etk.append('Enemy tickets');
+  const etkNum = make('b', 'hud-etk-num', etk);
   const etkFill = make('i', '', make('div', 'hud-bar hud-etk-bar', etk));
 
   // Right column: minimap, then the feed.
@@ -238,6 +245,15 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
   const breachKey = make('kbd', '', breachSlot);
   const breachText = make('b', '', breachSlot);
   const gadgetSlots: GadgetSlot[] = [];
+  const statusRow = make('div', 'hud-status', br);
+  const statusChips = (['shield', 'stim'] as const).map((id) => {
+    const node = make('div', 'hud-chip', statusRow);
+    node.dataset.status = id;
+    node.hidden = true;
+    const text = make('span', '', node);
+    const fill = make('i', '', make('div', 'hud-bar hud-chip-bar', node));
+    return { id, node, text, fill };
+  });
   const ks = make('div', 'hud-ks', br);
   const ksFill = make('i', '', make('div', 'hud-bar hud-ks-bar', br));
 
@@ -262,6 +278,10 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
   let disposed = false;
   let clock = 0;
   let hitKind: HitKind = 'hit';
+  let ticketShown = Number.NaN;
+  let slowAcc = 0;
+  let lastSlowMs = -Infinity;
+  let forceSlow = true;
   let hitTimer = 0;
   let announceKey: string | null = null;
   let announceTimer = 0;
@@ -321,7 +341,7 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
     });
   }
 
-  function updateTopBar(view: HudView): void {
+  function updateTopBar(view: HudView, elapsed: number): void {
     zoneCards.forEach((z, i) => {
       const state = view.zones[i];
       setHidden(z.card, state === undefined);
@@ -332,6 +352,12 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
       setStyle(z.fill, 'transform', scaleX(clamp01(state.prog)));
     });
     setStyle(etkFill, 'transform', scaleX(ticketFraction(view.tickets, view.ticketsStart)));
+    // The number eases toward the real value, so a capture that removes tickets reads as a drain.
+    ticketShown += (view.tickets - ticketShown) * Math.min(1, elapsed * 6);
+    if (Math.abs(view.tickets - ticketShown) < 0.5) ticketShown = view.tickets;
+    setText(etkNum, String(Math.round(ticketShown)));
+    setFlag(etk, 'drain', Math.round(ticketShown) !== view.tickets);
+    setFlag(etk, 'low', ticketFraction(view.tickets, view.ticketsStart) < 0.25);
   }
 
   function updateSquad(operators: readonly HudOperator[]): void {
@@ -358,6 +384,16 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
     setText(breachKey, view.breachKey);
     setText(breachText, `Breach ×${String(view.breachCharges)}`);
     setFlag(breachSlot, 'empty', view.breachCharges <= 0);
+  }
+
+  function updateStatuses(view: HudView): void {
+    for (const chip of statusChips) {
+      const s = view.statuses.find((x) => x.id === chip.id);
+      setHidden(chip.node, s === undefined);
+      if (s === undefined) continue;
+      setText(chip.text, `${s.label} ${String(Math.ceil(s.left))}s`);
+      setStyle(chip.fill, 'transform', scaleX(clamp01(s.frac)));
+    }
   }
 
   function updateKillstreak(view: HudView): void {
@@ -439,6 +475,7 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
       const item = shown[i];
       setHidden(node, item === undefined);
       if (item === undefined) return;
+      setFlag(node, 'new', item.age < 0.35);
       setText(node, item.r.key.text);
       setStyle(node, 'color', tokenVar(FEED_TOKEN[item.r.key.cls]));
       setStyle(node, 'opacity', feedFade(item.age).toFixed(3));
@@ -453,48 +490,73 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
       hitTimer = Math.max(0, hitTimer - step);
     }
     setFlag(hitMarker, 'on', hitTimer > 0);
+    setAttr(hitMarker, 'data-kind', hitKind);
+    // A fresh hit restarts the pop animation.
+    if (view.hitMarker !== 'none') {
+      hitMarker.classList.remove('pop');
+      hitMarker.getBoundingClientRect();
+      hitMarker.classList.add('pop');
+      setAttr(cross, 'data-hit', hitKind);
+    } else if (hitTimer <= 0) {
+      cross.removeAttribute('data-hit');
+    }
     setStyle(hitMarker, '--hud-hit', tokenVar(HIT_TOKEN[hitKind]));
   }
 
   function update(view: HudView, dt: number, extras: HudExtras = {}): void {
     if (disposed) return;
     const step = Number.isFinite(dt) && dt > 0 ? dt : 0;
+    if (Number.isNaN(ticketShown)) ticketShown = view.tickets;
     clock += step;
     const operators = extras.operators ?? [];
 
-    setStyle(root, '--hud-gap', `${gapFromSpread(extras.spread ?? 0).toFixed(1)}px`);
+    // On the crosshair, not the root: a custom property that changes every frame on the root restyles the whole HUD.
+    setStyle(cross, '--hud-gap', `${gapFromSpread(extras.spread ?? 0).toFixed(1)}px`);
     setStyle(whiteout, 'opacity', clamp01(view.whiteout).toFixed(3));
     setStyle(vignette, 'opacity', (clamp01(view.hurt) * VIGNETTE_MAX_OPACITY).toFixed(3));
 
-    setText(scoreEl, `Score ${String(view.score)}`);
-    setText(hostilesEl, `Hostiles ${String(view.hostilesAlive)}`);
-    setText(reinforcementsEl, `Reinforcements ${String(view.reinforcements)}`);
-    setText(operatorsEl, `Operators ${String(view.operatorsAlive)}/${String(view.operatorsTotal)}`);
-    setText(
-      orderEl,
-      `Squad: ${view.squadOrder}${extras.orderKey === undefined ? '' : ` [${extras.orderKey}]`}`,
-    );
-
-    updateSquad(operators.slice(0, SQUAD_CARDS));
+    // Panels whose numbers change a few times a second (score, counts, squad, tickets, gadgets, feed) are refreshed
+    // at 15 Hz. The crosshair, health, ammo, hit marker, compass and the projected labels stay on every frame.
+    slowAcc += step;
+    const nowMs = performance.now();
+    const runSlow = nowMs - lastSlowMs >= SLOW_INTERVAL_MS || forceSlow;
+    if (runSlow) {
+      lastSlowMs = nowMs;
+      forceSlow = false;
+      setText(scoreEl, `Score ${String(view.score)}`);
+      setText(hostilesEl, `Hostiles ${String(view.hostilesAlive)}`);
+      setText(reinforcementsEl, `Reinforcements ${String(view.reinforcements)}`);
+      setText(operatorsEl, `Operators ${String(view.operatorsAlive)}/${String(view.operatorsTotal)}`);
+      setText(
+        orderEl,
+        `Squad: ${view.squadOrder}${extras.orderKey === undefined ? '' : ` [${extras.orderKey}]`}`,
+      );
+      updateSquad(operators.slice(0, SQUAD_CARDS));
+      updateTopBar(view, slowAcc);
+      slowAcc = 0;
+    }
     updateCompass(view);
-    updateTopBar(view);
 
     setText(hpNum, formatHealth(view.hp));
     setStyle(hpFill, 'transform', scaleX(hpFraction(view.hp)));
     setFlag(bl, 'low', isLowHealth(view.hp));
+    setFlag(root, 'hud-lowhp', isLowHealth(view.hp) && view.alive);
     setStyle(staminaFill, 'transform', scaleX(clamp01(view.stamina)));
 
     setText(weaponEl, view.weaponName);
     setText(ammoEl, formatAmmo(view.ammo, view.reserve, view.reloading));
-    updateGadgets(view);
-    updateKillstreak(view);
+    if (runSlow) {
+      updateGadgets(view);
+      updateStatuses(view);
+      updateKillstreak(view);
+    }
 
     updateHitMarker(view, step);
     updateKia(view);
     updateScoreboard(extras);
     setText(prompt, view.prompt);
     updateAnnounce(view, step);
-    updateFeed(view);
+    if (runSlow) updateFeed(view);
 
     const project = options.project;
     updateWorldLabels(view, project);
@@ -523,6 +585,10 @@ export function createHud(root: HTMLElement, options: HudOptions = {}): Hud {
     update,
     setVisible(visible) {
       root.hidden = !visible;
+    },
+    setCrosshair(style, colour) {
+      setAttr(cross, 'data-style', style);
+      setAttr(cross, 'data-col', colour);
     },
     setColourMode(mode) {
       root.dataset.colour = mode;

@@ -20,6 +20,16 @@ export type Dpi = (typeof DPI_VALUES)[number];
 export const QUALITY_IDS = ['high', 'low'] as const;
 export type Quality = (typeof QUALITY_IDS)[number];
 
+export const CROSSHAIR_STYLES = ['cross', 'dot', 'circle', 'tee'] as const;
+export type CrosshairStyle = (typeof CROSSHAIR_STYLES)[number];
+
+export const CROSSHAIR_COLOURS = ['default', 'green', 'cyan', 'magenta', 'amber'] as const;
+export type CrosshairColour = (typeof CROSSHAIR_COLOURS)[number];
+
+// Frame rate cap for the match. 0 means uncapped (the display's refresh rate).
+export const FPS_CAPS = [0, 30, 60, 120] as const;
+export type FpsCap = (typeof FPS_CAPS)[number];
+
 export interface Settings {
   sens: number;
   adsMul: number;
@@ -33,6 +43,11 @@ export interface Settings {
   showFps: boolean;
   shake: boolean;
   colorblind: boolean;
+  crosshair: CrosshairStyle;
+  crosshairColour: CrosshairColour;
+  damageNumbers: boolean;
+  reducedMotion: boolean;
+  fpsCap: FpsCap;
 }
 
 export const DEFAULT_SETTINGS: Readonly<Settings> = {
@@ -47,6 +62,11 @@ export const DEFAULT_SETTINGS: Readonly<Settings> = {
   showFps: false,
   shake: true,
   colorblind: false,
+  crosshair: 'cross',
+  crosshairColour: 'default',
+  damageNumbers: true,
+  reducedMotion: false,
+  fpsCap: 0,
 };
 
 // index.html:567 (loadout defaults) and index.html:569-575 (gadget trimming)
@@ -112,6 +132,18 @@ export function validateQuality(value: unknown): Quality | undefined {
   return oneOf(QUALITY_IDS, value);
 }
 
+export function validateCrosshair(value: unknown): CrosshairStyle | undefined {
+  return oneOf(CROSSHAIR_STYLES, value);
+}
+
+export function validateCrosshairColour(value: unknown): CrosshairColour | undefined {
+  return oneOf(CROSSHAIR_COLOURS, value);
+}
+
+export function validateFpsCap(value: unknown): FpsCap | undefined {
+  return oneOf(FPS_CAPS, value);
+}
+
 export function validatePrimary(value: unknown): PrimaryWeaponId | undefined {
   return oneOf(PRIMARY_WEAPON_IDS, value);
 }
@@ -165,6 +197,11 @@ export function sanitizeSettings(raw: unknown): Settings {
     showFps: validateBoolean(r.showFps) ?? DEFAULT_SETTINGS.showFps,
     shake: validateBoolean(r.shake) ?? DEFAULT_SETTINGS.shake,
     colorblind: validateBoolean(r.colorblind) ?? DEFAULT_SETTINGS.colorblind,
+    crosshair: validateCrosshair(r.crosshair) ?? DEFAULT_SETTINGS.crosshair,
+    crosshairColour: validateCrosshairColour(r.crosshairColour) ?? DEFAULT_SETTINGS.crosshairColour,
+    damageNumbers: validateBoolean(r.damageNumbers) ?? DEFAULT_SETTINGS.damageNumbers,
+    reducedMotion: validateBoolean(r.reducedMotion) ?? DEFAULT_SETTINGS.reducedMotion,
+    fpsCap: validateFpsCap(r.fpsCap) ?? DEFAULT_SETTINGS.fpsCap,
   };
 }
 

@@ -132,10 +132,22 @@ describe('mapSimEventToSound', () => {
       type: 'sentry',
     });
     expect(
-      mapSimEventToSound({ type: 'enemyKilled', enemy: shooterOf('rifle'), by: 'player', head: true }),
+      mapSimEventToSound({
+        type: 'enemyKilled',
+        enemy: shooterOf('rifle'),
+        by: 'player',
+        head: true,
+        source: 'vx',
+      }),
     ).toEqual({ type: 'kill', head: true });
     expect(
-      mapSimEventToSound({ type: 'enemyKilled', enemy: shooterOf('rifle'), by: 'operator', head: false }),
+      mapSimEventToSound({
+        type: 'enemyKilled',
+        enemy: shooterOf('rifle'),
+        by: 'operator',
+        head: false,
+        source: 'squad',
+      }),
     ).toEqual({ type: 'kill', head: false });
   });
 
@@ -448,5 +460,37 @@ describe('AppSound', () => {
     sound.play({ type: 'kill', head: true });
     expect(ctx.oscillatorsMade).toBe(1);
     expect(ctx.sourcesMade).toBe(0);
+  });
+
+  it('drops repeated background sounds inside the minimum gap, but never the player sounds', () => {
+    const ctx = new FakeContext();
+    const sound = new AppSound({ volume: 0.8, muted: false }, () => AudioGraph.create(() => ctx));
+    sound.unlock();
+    sound.play({ type: 'enemyShot', sniper: false });
+    sound.play({ type: 'enemyShot', sniper: false });
+    expect(ctx.sourcesMade).toBe(1);
+    ctx.currentTime = 0.05;
+    sound.play({ type: 'enemyShot', sniper: false });
+    expect(ctx.sourcesMade).toBe(2);
+    sound.play({ type: 'gunfire', weapon: 'vx', suppressed: false });
+    sound.play({ type: 'gunfire', weapon: 'vx', suppressed: false });
+    expect(ctx.sourcesMade).toBe(4);
+  });
+
+  it('drops background sounds when too many sounds started in the last half second', () => {
+    const ctx = new FakeContext();
+    const sound = new AppSound({ volume: 0.8, muted: false }, () => AudioGraph.create(() => ctx));
+    sound.unlock();
+    for (let i = 0; i < 24; i++) sound.play({ type: 'explosion' });
+    expect(ctx.sourcesMade).toBe(24);
+    ctx.currentTime = 0.1;
+    sound.play({ type: 'friendlyRifle' });
+    expect(ctx.sourcesMade).toBe(24);
+    // A blast is still heard.
+    sound.play({ type: 'explosion' });
+    expect(ctx.sourcesMade).toBe(25);
+    ctx.currentTime = 1;
+    sound.play({ type: 'friendlyRifle' });
+    expect(ctx.sourcesMade).toBe(26);
   });
 });

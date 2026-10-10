@@ -15,48 +15,84 @@ export interface Sighting {
   eyeY: number;
 }
 
-interface Candidate {
-  target: Target;
-  pos: Vec3;
-  eyeY: number;
-  sightR: number;
+// Scratch vectors for the sight test, reused so a tick of many hostiles allocates nothing here. Single-threaded and
+// the values never outlive a call.
+const EYE: Vec3 = { x: 0, y: 0, z: 0 };
+const EYE_T: Vec3 = { x: 0, y: 0, z: 0 };
+const DIR: Vec3 = { x: 0, y: 0, z: 0 };
+
+// Tests one candidate against the best so far. Returns the new best distance, or the old one when it does not win.
+function tryCandidate(
+  e: Enemy,
+  w: AiWorld,
+  cx: number,
+  cy: number,
+  cz: number,
+  sightR: number,
+  bestD: number,
+): number {
+  if (Math.hypot(cx - e.pos.x, cz - e.pos.z) > sightR) return bestD;
+  EYE_T.x = cx;
+  EYE_T.y = cy;
+  EYE_T.z = cz;
+  const d3 = distance3(EYE, EYE_T);
+  if (d3 >= bestD) return bestD;
+  if (!losClear(EYE, EYE_T, w) || smokeBlocks(EYE, EYE_T, w.smokes)) return bestD;
+  return d3;
 }
 
 // Nearest target that is inside sight range, has a clear line from the enemy eye, and is not hidden by smoke.
-// Port of the candidate loop in legacy updEnemy (index.html:2256-2269).
+// Port of the candidate loop in legacy updEnemy (index.html:2256-2269). The player is tested first, then the
+// operators in order; a later candidate wins only when it is strictly nearer.
 export function visibleTarget(e: Enemy, w: AiWorld): Sighting | null {
-  const cands: Candidate[] = [];
-  if (w.player.alive) {
-    cands.push({
-      target: { kind: 'player' },
-      pos: { x: w.player.pos.x, y: w.player.pos.y, z: w.player.pos.z },
-      eyeY: w.player.pos.y + w.player.eyeHeight,
-      sightR: e.sight * (w.player.ghost ? GHOST_SIGHT_FACTOR : 1),
-    });
-  }
-  w.operators.forEach((o, index) => {
-    if (!o.alive) return;
-    cands.push({
-      target: { kind: 'operator', index },
-      pos: { x: o.pos.x, y: 0, z: o.pos.z },
-      eyeY: OPERATOR_EYE_Y,
-      sightR: e.sight,
-    });
-  });
-
-  const eye: Vec3 = { x: e.pos.x, y: HOSTILE_EYE_Y, z: e.pos.z };
-  let best: Sighting | null = null;
+  EYE.x = e.pos.x;
+  EYE.y = HOSTILE_EYE_Y;
+  EYE.z = e.pos.z;
   let bestD = Infinity;
-  for (const c of cands) {
-    if (Math.hypot(c.pos.x - e.pos.x, c.pos.z - e.pos.z) > c.sightR) continue;
-    const eyeT: Vec3 = { x: c.pos.x, y: c.eyeY, z: c.pos.z };
-    const d3 = distance3(eye, eyeT);
-    if (d3 >= bestD) continue;
-    if (!losClear(eye, eyeT, w) || smokeBlocks(eye, eyeT, w.smokes)) continue;
-    best = { target: c.target, pos: c.pos, eyeY: c.eyeY };
-    bestD = d3;
+  // -2: none, -1: the player, 0..n: that operator.
+  let bestIdx = -2;
+  if (w.player.alive) {
+    const pp = w.player.pos;
+    const d = tryCandidate(
+      e,
+      w,
+      pp.x,
+      pp.y + w.player.eyeHeight,
+      pp.z,
+      e.sight * (w.player.ghost ? GHOST_SIGHT_FACTOR : 1),
+      bestD,
+    );
+    if (d < bestD) {
+      bestD = d;
+      bestIdx = -1;
+    }
   }
-  return best;
+  const ops = w.operators;
+  for (let i = 0; i < ops.length; i++) {
+    const o = ops[i];
+    if (o === undefined || !o.alive) continue;
+    const d = tryCandidate(e, w, o.pos.x, OPERATOR_EYE_Y, o.pos.z, e.sight, bestD);
+    if (d < bestD) {
+      bestD = d;
+      bestIdx = i;
+    }
+  }
+  if (bestIdx === -2) return null;
+  if (bestIdx === -1) {
+    const pp = w.player.pos;
+    return {
+      target: { kind: 'player' },
+      pos: { x: pp.x, y: pp.y, z: pp.z },
+      eyeY: pp.y + w.player.eyeHeight,
+    };
+  }
+  const o = ops[bestIdx];
+  if (o === undefined) return null;
+  return {
+    target: { kind: 'operator', index: bestIdx },
+    pos: { x: o.pos.x, y: 0, z: o.pos.z },
+    eyeY: OPERATOR_EYE_Y,
+  };
 }
 
 // Segment from a to b has no world box in the way (legacy losClear, index.html:866-872).
@@ -66,8 +102,10 @@ export function losClear(a: Vec3, b: Vec3, w: AiWorld): boolean {
   const dz = b.z - a.z;
   const dist = Math.hypot(dx, dy, dz);
   if (dist < 0.01) return true;
-  const dir: Vec3 = { x: dx / dist, y: dy / dist, z: dz / dist };
-  return w.collision.raycast(a, dir, dist - 0.05) === null;
+  DIR.x = dx / dist;
+  DIR.y = dy / dist;
+  DIR.z = dz / dist;
+  return w.collision.raycast(a, DIR, dist - 0.05) === null;
 }
 
 // Some smoke sphere lies within its radius of the segment a-b (legacy smokeBlocks, index.html:875-878).

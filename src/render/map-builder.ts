@@ -1,4 +1,6 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { cachedTexture, freezeStatic } from './texture-cache';
 import type { Rng } from '../core/rng';
 import type { MapDef } from '../content/maps/types';
 import type { Aabb, BoxId, CollisionWorld } from '../sim/collision';
@@ -52,6 +54,58 @@ const SPAWN_COUNT = 24;
 const SPAWN_CLEARANCE = 1.5;
 const TAU = Math.PI * 2;
 
+// A tileable grey noise with specks and cracks. Multiplies the ground colour, so each map keeps its own hue.
+function makeGroundTexture(): THREE.CanvasTexture | null {
+  if (typeof document === 'undefined') return null;
+  // Same picture for every map and every match (fixed seed), so it is drawn once per page.
+  return cachedTexture('ground', drawGroundTexture);
+}
+
+function drawGroundTexture(): THREE.CanvasTexture | null {
+  const size = 256;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const g = canvas.getContext('2d');
+  if (g === null) return null;
+  g.fillStyle = '#c8c8c8';
+  g.fillRect(0, 0, size, size);
+  let seed = 12345;
+  const rnd = (): number => {
+    seed = (seed * 1664525 + 1013904223) >>> 0;
+    return seed / 4294967296;
+  };
+  for (let i = 0; i < 2600; i++) {
+    const v = 150 + Math.floor(rnd() * 105);
+    g.fillStyle = `rgba(${String(v)},${String(v)},${String(v)},0.35)`;
+    const r = 1 + rnd() * 5;
+    g.beginPath();
+    g.arc(rnd() * size, rnd() * size, r, 0, Math.PI * 2);
+    g.fill();
+  }
+  g.strokeStyle = 'rgba(90,90,90,0.35)';
+  for (let i = 0; i < 14; i++) {
+    g.lineWidth = 0.6 + rnd();
+    g.beginPath();
+    let x = rnd() * size;
+    let y = rnd() * size;
+    g.moveTo(x, y);
+    for (let k = 0; k < 5; k++) {
+      x += (rnd() - 0.5) * 40;
+      y += (rnd() - 0.5) * 40;
+      g.lineTo(x, y);
+    }
+    g.stroke();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(48, 48);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
 function d2(ax: number, az: number, bx: number, bz: number): number {
   return (ax - bx) ** 2 + (az - bz) ** 2;
 }
@@ -92,6 +146,12 @@ export function buildMap(def: MapDef, scene: THREE.Scene, world: CollisionWorld,
     new THREE.MeshStandardMaterial({ color: 0xe0b030, emissive: 0x4a3600, roughness: 0.6 }),
   );
   const groundMat = own(new THREE.MeshStandardMaterial({ color: def.ground, roughness: 1 }));
+  const groundTex = makeGroundTexture();
+  if (groundTex) {
+    groundMat.map = groundTex;
+    groundMat.bumpMap = groundTex;
+    groundMat.bumpScale = 0.6;
+  }
 
   const add = (o: THREE.Object3D): void => {
     scene.add(o);
@@ -127,6 +187,7 @@ export function buildMap(def: MapDef, scene: THREE.Scene, world: CollisionWorld,
   const ground = addMesh(new THREE.PlaneGeometry(240, 240), groundMat);
   ground.rotation.x = -Math.PI / 2;
   ground.receiveShadow = true;
+  freezeStatic(ground);
 
   // Registers a collider in the world and in the local list used by the overlap test in areaFree.
   const collide = (box: Aabb, breakable: boolean): BoxId => {
@@ -136,7 +197,7 @@ export function buildMap(def: MapDef, scene: THREE.Scene, world: CollisionWorld,
     return id;
   };
 
-  // A box mesh sitting on min.y (as boxes.ts boxMesh).
+  // A box mesh sitting on min.y (as boxes.ts boxMesh). Used for the walls that can break, which need their own mesh.
   const addBoxMesh = (box: Aabb, mat: THREE.Material): THREE.Mesh => {
     const sx = box.max.x - box.min.x;
     const sy = box.max.y - box.min.y;
@@ -148,15 +209,45 @@ export function buildMap(def: MapDef, scene: THREE.Scene, world: CollisionWorld,
     return mesh;
   };
 
+  // Static props and walls never move or vanish, so every box of one material is baked into one geometry: a few
+  // draw calls (and shadow draws) instead of one per box. The batches are flushed once, before buildMap returns.
+  const batches = new Map<THREE.Material, THREE.BufferGeometry[]>();
+  const batch = (geo: THREE.BufferGeometry, mat: THREE.Material): void => {
+    const list = batches.get(mat);
+    if (list === undefined) batches.set(mat, [geo]);
+    else list.push(geo);
+  };
+  const addStaticBox = (box: Aabb, mat: THREE.Material): void => {
+    const sx = box.max.x - box.min.x;
+    const sy = box.max.y - box.min.y;
+    const sz = box.max.z - box.min.z;
+    const geo = new THREE.BoxGeometry(sx, sy, sz);
+    geo.translate((box.min.x + box.max.x) / 2, box.min.y + sy / 2, (box.min.z + box.max.z) / 2);
+    batch(geo, mat);
+  };
+  const flushBatches = (): void => {
+    for (const [mat, list] of batches) {
+      const first = list[0];
+      if (first === undefined) continue;
+      const merged = list.length === 1 ? first : mergeGeometries(list);
+      if (merged !== first) for (const g of list) g.dispose();
+      const mesh = addMesh(merged, mat);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      freezeStatic(mesh);
+    }
+    batches.clear();
+  };
+
   // Mesh of each breakable wall, by collider id, so breakBox can remove it once the sim breaks the wall.
   const breakMeshes = new Map<BoxId, THREE.Mesh>();
   // Map colliders in data order: boundary, buildings, cover (same order as legacy addBox calls).
   for (const b of def.boxes) {
     const id = collide(b, b.breakable);
-    const mesh = addBoxMesh(b, b.breakable ? woodMat : wallMat);
-    if (b.breakable) breakMeshes.set(id, mesh);
+    if (b.breakable) breakMeshes.set(id, addBoxMesh(b, woodMat));
+    else addStaticBox(b, wallMat);
   }
-  for (const r of def.roofs) addBoxMesh(r, trimMat);
+  for (const r of def.roofs) addStaticBox(r, trimMat);
 
   // Legacy areaFree (index.html:806-812).
   const areaFree = (x0: number, z0: number, x1: number, z1: number): boolean => {
@@ -188,7 +279,7 @@ export function buildMap(def: MapDef, scene: THREE.Scene, world: CollisionWorld,
     if (!areaFree(x, z, x1, z1)) continue;
     const box: Aabb = { min: { x, y: 0, z }, max: { x: x1, y: SANDBAG_H, z: z1 } };
     collide(box, false);
-    addBoxMesh(box, sandMat);
+    addStaticBox(box, sandMat);
     sandbags.push({ x: (x + x1) / 2, z: (z + z1) / 2, w: x1 - x, d: z1 - z, h: SANDBAG_H });
   }
 
@@ -200,10 +291,9 @@ export function buildMap(def: MapDef, scene: THREE.Scene, world: CollisionWorld,
     if (!areaFree(x - 0.5, z - 0.5, x + 0.5, z + 0.5)) continue;
     const cr = BARREL_R * 0.9;
     collide({ min: { x: x - cr, y: 0, z: z - cr }, max: { x: x + cr, y: BARREL_H, z: z + cr } }, false);
-    const mesh = addMesh(new THREE.CylinderGeometry(BARREL_R, BARREL_R, BARREL_H, 14), barrelMat);
-    mesh.position.set(x, BARREL_H / 2, z);
-    mesh.castShadow = true;
-    mesh.receiveShadow = true;
+    const barrelGeo = new THREE.CylinderGeometry(BARREL_R, BARREL_R, BARREL_H, 14);
+    barrelGeo.translate(x, BARREL_H / 2, z);
+    batch(barrelGeo, barrelMat);
     barrels.push({ x, z, r: BARREL_R, h: BARREL_H });
   }
 
@@ -222,7 +312,7 @@ export function buildMap(def: MapDef, scene: THREE.Scene, world: CollisionWorld,
       max: { x: x + w / 2, y: h, z: z + d / 2 },
     };
     collide(box, false);
-    addBoxMesh(box, mat);
+    addStaticBox(box, mat);
     crates.push({ x, z, w, d, h });
   }
 
@@ -245,6 +335,8 @@ export function buildMap(def: MapDef, scene: THREE.Scene, world: CollisionWorld,
     pickups.push({ x, z });
     pickupMeshes.push(mesh);
   }
+
+  flushBatches();
 
   // Spawns on a ring (index.html:1086-1090). A fallback point is used only if every ring point is blocked.
   const spawns: { x: number; z: number }[] = [];

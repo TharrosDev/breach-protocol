@@ -24,7 +24,7 @@ const DROP = -0.12;
 
 export class CasingField {
   private casings: Casing[] = [];
-  private readonly capacity: number;
+  readonly capacity: number;
 
   constructor(max = DEFAULT_MAX) {
     if (!Number.isInteger(max) || max < 1) {
@@ -57,6 +57,7 @@ export class CasingField {
   }
 
   update(dt: number): void {
+    let w = 0;
     for (const c of this.casings) {
       c.life -= dt;
       c.vel.y -= GRAVITY * dt;
@@ -70,7 +71,8 @@ export class CasingField {
         c.vel.x *= FRICTION;
         c.vel.z *= FRICTION;
       }
+      if (c.life > 0) this.casings[w++] = c;
     }
-    this.casings = this.casings.filter((c) => c.life > 0);
+    this.casings.length = w;
   }
 }

@@ -4,6 +4,7 @@ import {
   audioSupported,
   noise,
   tone,
+  toneAt,
   playEvent,
   type AudioBufferLike,
   type AudioContextLike,
@@ -403,5 +404,51 @@ describe('playEvent', () => {
     const rifle = makeGraph();
     playEvent(rifle.graph, { type: 'enemyShot', sniper: false });
     expect(nth(rifle.ctx.filters, 0).frequency.value).toBe(1500);
+  });
+});
+
+describe('gadget and killstreak recipes', () => {
+  it('toneAt() starts at the delay and fades from there', () => {
+    const { ctx, graph } = makeGraph();
+    toneAt(graph, 'sfx', 880, 0.1, 0.07, 0.25);
+    const osc = nth(ctx.oscillators, 0);
+    expect(osc.frequency.value).toBe(880);
+    expect(osc.started).toBeCloseTo(2.25, 10);
+    expect(osc.stopped).toBeCloseTo(2.35, 10);
+    expect(lastGain(ctx).gain.events).toEqual([
+      { kind: 'set', value: 0.07, time: 2.25 },
+      { kind: 'ramp', value: 0.001, time: 2.35 },
+    ]);
+  });
+
+  it('medic heal is two rising notes on the sfx bus', () => {
+    const { ctx, graph } = makeGraph();
+    playEvent(graph, { type: 'medicHeal' });
+    expect(ctx.oscillators.map((o) => o.frequency.value)).toEqual([880, 1175]);
+    expect(nth(ctx.oscillators, 1).started).toBeGreaterThan(nth(ctx.oscillators, 0).started ?? 0);
+  });
+
+  it('the shield rises in pitch, with a hiss', () => {
+    const { ctx, graph } = makeGraph();
+    playEvent(graph, { type: 'shield' });
+    const freqs = ctx.oscillators.map((o) => o.frequency.value);
+    expect(freqs).toEqual([...freqs].sort((a, b) => a - b));
+    expect(freqs).toHaveLength(4);
+    expect(ctx.sources).toHaveLength(1);
+  });
+
+  it('the EMP falls in pitch over a rumble', () => {
+    const { ctx, graph } = makeGraph();
+    playEvent(graph, { type: 'emp' });
+    const freqs = ctx.oscillators.map((o) => o.frequency.value);
+    expect(freqs).toEqual([...freqs].sort((a, b) => b - a));
+    expect(ctx.sources).toHaveLength(1);
+    expect(nth(ctx.filters, 0).frequency.value).toBe(600);
+  });
+
+  it('a claymore set makes two clicks', () => {
+    const { ctx, graph } = makeGraph();
+    playEvent(graph, { type: 'mineSet' });
+    expect(ctx.oscillators.map((o) => o.frequency.value)).toEqual([1200, 800]);
   });
 });
